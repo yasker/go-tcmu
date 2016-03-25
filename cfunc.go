@@ -59,5 +59,21 @@ bool tcmu_poll_master_fd(struct tcmulib_context *cxt) {
 	return false;
 }
 
+int tcmu_wait_for_next_command(struct tcmu_device *dev) {
+	struct pollfd pfd;
+
+	pfd.fd = tcmu_get_dev_fd(dev);
+	pfd.events = POLLIN;
+	pfd.revents = 0;
+
+	poll(&pfd, 1, -1);
+
+	if (pfd.revents != POLLIN) {
+		errp("poll received unexpected revent: 0x%x\n", pfd.revents);
+		return -1;
+	}
+	return 0;
+}
+
 */
 import "C"
