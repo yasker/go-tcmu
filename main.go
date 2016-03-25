@@ -148,13 +148,11 @@ func handleCommand(dev *C.struct_tcmu_device, cmd *C.struct_tcmulib_cmd, state *
 			return int(C.tcmucmd_set_medium_error(cmd))
 		}
 
-		goBuf := C.GoBytes(buf, C.int(length))
+		goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
 		defer C.free(buf)
-		if readed, err := state.file.ReadAt(goBuf, offset); err != nil {
-			if readed != length || err != io.EOF {
-				log.Errorln("read failed: ", err.Error())
-				return int(C.tcmucmd_set_medium_error(cmd))
-			}
+		if _, err := state.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
+			log.Errorln("read failed: ", err.Error())
+			return int(C.tcmucmd_set_medium_error(cmd))
 		}
 
 		copied := C.tcmucmd_memcpy_into_iovec(cmd, buf, C.int(length))
@@ -179,7 +177,7 @@ func handleCommand(dev *C.struct_tcmu_device, cmd *C.struct_tcmulib_cmd, state *
 			return int(C.tcmucmd_set_medium_error(cmd))
 		}
 
-		goBuf := C.GoBytes(buf, C.int(length))
+		goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
 		defer C.free(buf)
 		if _, err := state.file.WriteAt(goBuf, offset); err != nil {
 			log.Errorln("write failed: ", err.Error())
