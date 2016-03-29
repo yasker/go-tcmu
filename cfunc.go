@@ -20,7 +20,6 @@ void errp(const char *fmt, ...)
 }
 
 int sh_open_cgo(struct tcmu_device *dev) {
-	errp("open called\n");
 	return shOpen(dev);
 }
 
@@ -77,61 +76,73 @@ int tcmu_wait_for_next_command(struct tcmu_device *dev) {
 	return 0;
 }
 
-uint8_t tcmucmd_get_scsi_cmd(struct tcmulib_cmd *cmd) {
-	return cmd->cdb[0];
-}
-
-int tcmucmd_emulate_inquiry(struct tcmulib_cmd *cmd, struct tcmu_device *dev) {
-	return tcmu_emulate_inquiry(dev,
-			cmd->cdb, cmd->iovec, cmd->iov_cnt, cmd->sense_buf);
-}
-
-int tcmucmd_emulate_test_unit_ready(struct tcmulib_cmd *cmd) {
-	return tcmu_emulate_test_unit_ready(cmd->cdb, cmd->iovec,
-			cmd->iov_cnt, cmd->sense_buf);
-}
-
-int tcmucmd_emulate_service_action_in(struct tcmulib_cmd *cmd,
-		uint64_t num_lbas, uint32_t block_size) {
-	if (cmd->cdb[1] == READ_CAPACITY_16) {
-		return tcmu_emulate_read_capacity_16(num_lbas,
-			block_size,
-			cmd->cdb, cmd->iovec, cmd->iov_cnt, cmd->sense_buf);
-	}
-	return TCMU_NOT_HANDLED;
-}
-
-int tcmucmd_emulate_mode_sense(struct tcmulib_cmd *cmd) {
-	return tcmu_emulate_mode_sense(cmd->cdb, cmd->iovec, cmd->iov_cnt, cmd->sense_buf);
-}
-
-int tcmucmd_emulate_mode_select(struct tcmulib_cmd *cmd) {
-	return tcmu_emulate_mode_select(cmd->cdb, cmd->iovec, cmd->iov_cnt, cmd->sense_buf);
-}
-
-int tcmucmd_set_medium_error(struct tcmulib_cmd *cmd) {
-	return tcmu_set_sense_data(cmd->sense_buf, MEDIUM_ERROR, ASC_READ_ERROR, NULL);
-}
-
-uint64_t tcmucmd_get_lba(struct tcmulib_cmd *cmd) {
-	return tcmu_get_lba(cmd->cdb);
-}
-
-uint32_t tcmucmd_get_xfer_length(struct tcmulib_cmd *cmd) {
-	return tcmu_get_xfer_length(cmd->cdb);
+uint8_t tcmucmd_get_cdb_at(struct tcmulib_cmd *cmd, int index) {
+	return cmd->cdb[index];
 }
 
 void *allocate_buffer(int length) {
 	return calloc(1, length);
 }
 
-int tcmucmd_memcpy_into_iovec(struct tcmulib_cmd *cmd, void *buf, int length) {
-	return tcmu_memcpy_into_iovec(cmd->iovec, cmd->iov_cnt, buf, length);
-}
-
-int tcmucmd_memcpy_from_iovec(struct tcmulib_cmd *cmd, void *buf, int length) {
-	return tcmu_memcpy_from_iovec(buf, length, cmd->iovec, cmd->iov_cnt);
-}
-
 */
 import "C"
+
+import (
+	"unsafe"
+)
+
+type (
+	TcmuCommand *C.struct_tcmulib_cmd
+	TcmuDevice  *C.struct_tcmu_device
+
+	Cbuffer *C.void
+)
+
+func CmdGetScsiCmd(cmd TcmuCommand) byte {
+	return byte(C.tcmucmd_get_cdb_at(cmd, 0))
+}
+
+func CmdMemcpyIntoIovec(cmd TcmuCommand, buf unsafe.Pointer, length int) int {
+	return int(C.tcmu_memcpy_into_iovec(cmd.iovec, cmd.iov_cnt, buf, C.size_t(length)))
+}
+
+func CmdMemcpyFromIovec(cmd TcmuCommand, buf unsafe.Pointer, length int) int {
+	return int(C.tcmu_memcpy_from_iovec(buf, C.size_t(length), cmd.iovec, cmd.iov_cnt))
+}
+
+func CmdSetMediumError(cmd TcmuCommand) int {
+	return int(C.tcmu_set_sense_data(&cmd.sense_buf[0], C.MEDIUM_ERROR, C.ASC_READ_ERROR, nil))
+}
+
+func CmdGetLba(cmd TcmuCommand) int64 {
+	return int64(C.tcmu_get_lba(cmd.cdb))
+}
+
+func CmdGetXferLength(cmd TcmuCommand) int {
+	return int(C.tcmu_get_xfer_length(cmd.cdb))
+}
+
+func CmdEmulateInquiry(cmd TcmuCommand, dev TcmuDevice) int {
+	return int(C.tcmu_emulate_inquiry(dev, cmd.cdb, cmd.iovec, cmd.iov_cnt, &cmd.sense_buf[0]))
+}
+
+func CmdEmulateTestUnitReady(cmd TcmuCommand) int {
+	return int(C.tcmu_emulate_test_unit_ready(cmd.cdb, cmd.iovec, cmd.iov_cnt, &cmd.sense_buf[0]))
+}
+
+func CmdEmulateModeSense(cmd TcmuCommand) int {
+	return int(C.tcmu_emulate_mode_sense(cmd.cdb, cmd.iovec, cmd.iov_cnt, &cmd.sense_buf[0]))
+}
+
+func CmdEmulateModeSelect(cmd TcmuCommand) int {
+	return int(C.tcmu_emulate_mode_select(cmd.cdb, cmd.iovec, cmd.iov_cnt, &cmd.sense_buf[0]))
+}
+
+func CmdEmulateServiceActionIn(cmd TcmuCommand, numLbas int64, blockSize int) int {
+	if C.tcmucmd_get_cdb_at(cmd, 1) == C.READ_CAPACITY_16 {
+		return int(C.tcmu_emulate_read_capacity_16(C.uint64_t(numLbas),
+			C.uint32_t(blockSize),
+			cmd.cdb, cmd.iovec, cmd.iov_cnt, &cmd.sense_buf[0]))
+	}
+	return C.TCMU_NOT_HANDLED
+}
