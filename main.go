@@ -40,7 +40,7 @@ type TcmuState struct {
 }
 
 //export shOpen
-func shOpen(dev *C.struct_tcmu_device) int {
+func shOpen(dev TcmuDevice) int {
 	var (
 		state TcmuState
 		err   error
@@ -85,7 +85,7 @@ func shOpen(dev *C.struct_tcmu_device) int {
 	return 0
 }
 
-func handleRequest(dev *C.struct_tcmu_device, state *TcmuState) {
+func handleRequest(dev TcmuDevice, state *TcmuState) {
 	defer state.file.Close()
 	for true {
 		completed := false
@@ -111,7 +111,7 @@ func handleRequest(dev *C.struct_tcmu_device, state *TcmuState) {
 	}
 }
 
-func handleCommand(dev *C.struct_tcmu_device, cmd *C.struct_tcmulib_cmd, state *TcmuState) int {
+func handleCommand(dev TcmuDevice, cmd TcmuCommand, state *TcmuState) int {
 	scsiCmd := CmdGetScsiCmd(cmd)
 	switch scsiCmd {
 	case C.INQUIRY:
@@ -178,7 +178,7 @@ func handleCommand(dev *C.struct_tcmu_device, cmd *C.struct_tcmulib_cmd, state *
 }
 
 //export shClose
-func shClose(dev *C.struct_tcmu_device) {
+func shClose(dev TcmuDevice) {
 	log.Debugln("Device removed")
 }
 
