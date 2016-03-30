@@ -128,22 +128,34 @@ func handleCommand(dev TcmuDevice, cmd TcmuCommand, state *TcmuState) int {
 		offset := CmdGetLba(cmd) * int64(state.blockSize)
 		length := CmdGetXferLength(cmd) * state.blockSize
 
-		buf := C.allocate_buffer(C.int(length))
+		//Go managed buffer is slower?
+		/*
+			buf := C.allocate_buffer(C.int(length))
+			if buf == nil {
+				log.Errorln("read failed: fail to allocate buffer")
+				return CmdSetMediumError(cmd)
+			}
+			goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
+			defer C.free(buf)
+			if _, err := state.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
+				log.Errorln("read failed: ", err.Error())
+				return CmdSetMediumError(cmd)
+			}
+
+			copied := CmdMemcpyIntoIovec(cmd, buf, length)
+			if copied != length {
+				log.Errorln("read failed: unable to complete buffer copy ")
+				return CmdSetMediumError(cmd)
+			}
+		*/
+		buf := make([]byte, length, length)
 		if buf == nil {
 			log.Errorln("read failed: fail to allocate buffer")
 			return CmdSetMediumError(cmd)
 		}
 
-		goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
-		defer C.free(buf)
-		if _, err := state.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
+		if _, err := state.file.ReadAt(buf, offset); err != nil && err != io.EOF {
 			log.Errorln("read failed: ", err.Error())
-			return CmdSetMediumError(cmd)
-		}
-
-		copied := CmdMemcpyIntoIovec(cmd, buf, length)
-		if copied != length {
-			log.Errorln("read failed: unable to complete buffer copy ")
 			return CmdSetMediumError(cmd)
 		}
 
@@ -152,7 +164,20 @@ func handleCommand(dev TcmuDevice, cmd TcmuCommand, state *TcmuState) int {
 		offset := CmdGetLba(cmd) * int64(state.blockSize)
 		length := CmdGetXferLength(cmd) * state.blockSize
 
-		buf := C.allocate_buffer(C.int(length))
+		//Go managed buffer is slower?
+		/*
+			buf := C.allocate_buffer(C.int(length))
+			if buf == nil {
+				log.Errorln("read failed: fail to allocate buffer")
+				return CmdSetMediumError(cmd)
+			}
+			copied := CmdMemcpyFromIovec(cmd, buf, length)
+			if copied != length {
+				log.Errorln("write failed: unable to complete buffer copy ")
+				return CmdSetMediumError(cmd)
+			}
+		*/
+		buf := make([]byte, length, length)
 		if buf == nil {
 			log.Errorln("read failed: fail to allocate buffer")
 			return CmdSetMediumError(cmd)
@@ -163,9 +188,7 @@ func handleCommand(dev TcmuDevice, cmd TcmuCommand, state *TcmuState) int {
 			return CmdSetMediumError(cmd)
 		}
 
-		goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
-		defer C.free(buf)
-		if _, err := state.file.WriteAt(goBuf, offset); err != nil {
+		if _, err := state.file.WriteAt(buf, offset); err != nil {
 			log.Errorln("write failed: ", err.Error())
 			return CmdSetMediumError(cmd)
 		}
