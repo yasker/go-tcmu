@@ -110,28 +110,28 @@ func (s *TcmuState) handleReadCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	//Go managed buffer is slower?
 	/*
-		buf := C.allocate_buffer(C.int(length))
+		//Go managed buffer is 40% slower?
+		buf := make([]byte, length, length)
 		if buf == nil {
 			log.Errorln("read failed: fail to allocate buffer")
 			return CmdSetMediumError(cmd)
 		}
-		goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
-		defer C.free(buf)
-		if _, err := state.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
+
+		if _, err := s.file.ReadAt(buf, offset); err != nil && err != io.EOF {
 			log.Errorln("read failed: ", err.Error())
 			return CmdSetMediumError(cmd)
 		}
-
 	*/
-	buf := make([]byte, length, length)
+
+	buf := C.allocate_buffer(C.int(length))
 	if buf == nil {
 		log.Errorln("read failed: fail to allocate buffer")
 		return CmdSetMediumError(cmd)
 	}
-
-	if _, err := s.file.ReadAt(buf, offset); err != nil && err != io.EOF {
+	defer C.free(buf)
+	goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
+	if _, err := s.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
 		log.Errorln("read failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
@@ -148,9 +148,9 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	//Go managed buffer is slower?
 	/*
-		buf := C.allocate_buffer(C.int(length))
+		//Go managed buffer is 40% slower?
+		buf := make([]byte, length, length)
 		if buf == nil {
 			log.Errorln("read failed: fail to allocate buffer")
 			return CmdSetMediumError(cmd)
@@ -161,18 +161,20 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 			return CmdSetMediumError(cmd)
 		}
 	*/
-	buf := make([]byte, length, length)
+	buf := C.allocate_buffer(C.int(length))
 	if buf == nil {
 		log.Errorln("read failed: fail to allocate buffer")
 		return CmdSetMediumError(cmd)
 	}
+	defer C.free(buf)
 	copied := CmdMemcpyFromIovec(cmd, buf, length)
 	if copied != length {
 		log.Errorln("write failed: unable to complete buffer copy ")
 		return CmdSetMediumError(cmd)
 	}
+	goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
 
-	if _, err := s.file.WriteAt(buf, offset); err != nil {
+	if _, err := s.file.WriteAt(goBuf, offset); err != nil {
 		log.Errorln("write failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
