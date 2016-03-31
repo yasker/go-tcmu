@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/yasker/go-tcmu/util"
@@ -37,15 +38,18 @@ type TcmuState struct {
 	file      *os.File
 	lbas      int64
 	blockSize int
+	mutex     *sync.Mutex
 }
 
 //export shOpen
 func shOpen(dev TcmuDevice) int {
 	var (
-		state TcmuState
-		err   error
+		err error
 	)
 
+	state := &TcmuState{
+		mutex: &sync.Mutex{},
+	}
 	blockSizeStr := C.CString("hw_block_size")
 	defer C.free(unsafe.Pointer(blockSizeStr))
 	blockSize := int(C.tcmu_get_attribute(dev, blockSizeStr))
@@ -79,29 +83,20 @@ func shOpen(dev TcmuDevice) int {
 		log.Errorln("Fail to open disk file", err.Error())
 		return -C.EINVAL
 	}
-	go handleRequest(dev, &state)
+	go state.HandleRequest(dev)
 
 	log.Debugln("Device added")
 	return 0
 }
 
-func handleRequest(dev TcmuDevice, state *TcmuState) {
-	defer state.file.Close()
+func (s *TcmuState) HandleRequest(dev TcmuDevice) {
+	defer s.file.Close()
 	for true {
-		completed := false
-
 		C.tcmulib_processing_start(dev)
 		cmd := C.tcmulib_get_next_command(dev)
 		for cmd != nil {
-			ret := handleCommand(dev, cmd, state)
-			if ret != C.TCMU_ASYNC_HANDLED {
-				C.tcmulib_command_complete(dev, cmd, C.int(ret))
-				completed = true
-			}
+			go s.processCommand(dev, cmd)
 			cmd = C.tcmulib_get_next_command(dev)
-		}
-		if completed {
-			C.tcmulib_processing_complete(dev)
 		}
 		ret := C.tcmu_wait_for_next_command(dev)
 		if ret != 0 {
@@ -111,73 +106,51 @@ func handleRequest(dev TcmuDevice, state *TcmuState) {
 	}
 }
 
-func handleCommand(dev TcmuDevice, cmd TcmuCommand, state *TcmuState) int {
-	scsiCmd := CmdGetScsiCmd(cmd)
-	switch scsiCmd {
-	case C.INQUIRY:
-		return CmdEmulateInquiry(cmd, dev)
-	case C.TEST_UNIT_READY:
-		return CmdEmulateTestUnitReady(cmd)
-	case C.SERVICE_ACTION_IN_16:
-		return CmdEmulateServiceActionIn(cmd, state.lbas, state.blockSize)
-	case C.MODE_SENSE, C.MODE_SENSE_10:
-		return CmdEmulateModeSense(cmd)
-	case C.MODE_SELECT, C.MODE_SELECT_10:
-		return CmdEmulateModeSelect(cmd)
-	case C.READ_6, C.READ_10, C.READ_12, C.READ_16:
-		offset := CmdGetLba(cmd) * int64(state.blockSize)
-		length := CmdGetXferLength(cmd) * state.blockSize
+func (s *TcmuState) handleReadCommand(dev TcmuDevice, cmd TcmuCommand) int {
+	offset := CmdGetLba(cmd) * int64(s.blockSize)
+	length := CmdGetXferLength(cmd) * s.blockSize
 
-		//Go managed buffer is slower?
-		/*
-			buf := C.allocate_buffer(C.int(length))
-			if buf == nil {
-				log.Errorln("read failed: fail to allocate buffer")
-				return CmdSetMediumError(cmd)
-			}
-			goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
-			defer C.free(buf)
-			if _, err := state.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
-				log.Errorln("read failed: ", err.Error())
-				return CmdSetMediumError(cmd)
-			}
-
-			copied := CmdMemcpyIntoIovec(cmd, buf, length)
-			if copied != length {
-				log.Errorln("read failed: unable to complete buffer copy ")
-				return CmdSetMediumError(cmd)
-			}
-		*/
-		buf := make([]byte, length, length)
+	//Go managed buffer is slower?
+	/*
+		buf := C.allocate_buffer(C.int(length))
 		if buf == nil {
 			log.Errorln("read failed: fail to allocate buffer")
 			return CmdSetMediumError(cmd)
 		}
-
-		if _, err := state.file.ReadAt(buf, offset); err != nil && err != io.EOF {
+		goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
+		defer C.free(buf)
+		if _, err := state.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
 			log.Errorln("read failed: ", err.Error())
 			return CmdSetMediumError(cmd)
 		}
 
-		return C.SAM_STAT_GOOD
-	case C.WRITE_6, C.WRITE_10, C.WRITE_12, C.WRITE_16:
-		offset := CmdGetLba(cmd) * int64(state.blockSize)
-		length := CmdGetXferLength(cmd) * state.blockSize
+	*/
+	buf := make([]byte, length, length)
+	if buf == nil {
+		log.Errorln("read failed: fail to allocate buffer")
+		return CmdSetMediumError(cmd)
+	}
 
-		//Go managed buffer is slower?
-		/*
-			buf := C.allocate_buffer(C.int(length))
-			if buf == nil {
-				log.Errorln("read failed: fail to allocate buffer")
-				return CmdSetMediumError(cmd)
-			}
-			copied := CmdMemcpyFromIovec(cmd, buf, length)
-			if copied != length {
-				log.Errorln("write failed: unable to complete buffer copy ")
-				return CmdSetMediumError(cmd)
-			}
-		*/
-		buf := make([]byte, length, length)
+	if _, err := s.file.ReadAt(buf, offset); err != nil && err != io.EOF {
+		log.Errorln("read failed: ", err.Error())
+		return CmdSetMediumError(cmd)
+	}
+
+	copied := CmdMemcpyIntoIovec(cmd, buf, length)
+	if copied != length {
+		log.Errorln("read failed: unable to complete buffer copy ")
+		return CmdSetMediumError(cmd)
+	}
+	return C.SAM_STAT_GOOD
+}
+
+func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
+	offset := CmdGetLba(cmd) * int64(s.blockSize)
+	length := CmdGetXferLength(cmd) * s.blockSize
+
+	//Go managed buffer is slower?
+	/*
+		buf := C.allocate_buffer(C.int(length))
 		if buf == nil {
 			log.Errorln("read failed: fail to allocate buffer")
 			return CmdSetMediumError(cmd)
@@ -187,13 +160,53 @@ func handleCommand(dev TcmuDevice, cmd TcmuCommand, state *TcmuState) int {
 			log.Errorln("write failed: unable to complete buffer copy ")
 			return CmdSetMediumError(cmd)
 		}
+	*/
+	buf := make([]byte, length, length)
+	if buf == nil {
+		log.Errorln("read failed: fail to allocate buffer")
+		return CmdSetMediumError(cmd)
+	}
+	copied := CmdMemcpyFromIovec(cmd, buf, length)
+	if copied != length {
+		log.Errorln("write failed: unable to complete buffer copy ")
+		return CmdSetMediumError(cmd)
+	}
 
-		if _, err := state.file.WriteAt(buf, offset); err != nil {
-			log.Errorln("write failed: ", err.Error())
-			return CmdSetMediumError(cmd)
-		}
+	if _, err := s.file.WriteAt(buf, offset); err != nil {
+		log.Errorln("write failed: ", err.Error())
+		return CmdSetMediumError(cmd)
+	}
 
-		return C.SAM_STAT_GOOD
+	return C.SAM_STAT_GOOD
+}
+
+func (s *TcmuState) processCommand(dev TcmuDevice, cmd TcmuCommand) {
+	ret := s.handleCommand(dev, cmd)
+
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	C.tcmulib_command_complete(dev, cmd, C.int(ret))
+	C.tcmulib_processing_complete(dev)
+}
+
+func (s *TcmuState) handleCommand(dev TcmuDevice, cmd TcmuCommand) int {
+	scsiCmd := CmdGetScsiCmd(cmd)
+	switch scsiCmd {
+	case C.INQUIRY:
+		return CmdEmulateInquiry(cmd, dev)
+	case C.TEST_UNIT_READY:
+		return CmdEmulateTestUnitReady(cmd)
+	case C.SERVICE_ACTION_IN_16:
+		return CmdEmulateServiceActionIn(cmd, s.lbas, s.blockSize)
+	case C.MODE_SENSE, C.MODE_SENSE_10:
+		return CmdEmulateModeSense(cmd)
+	case C.MODE_SELECT, C.MODE_SELECT_10:
+		return CmdEmulateModeSelect(cmd)
+	case C.READ_6, C.READ_10, C.READ_12, C.READ_16:
+		return s.handleReadCommand(dev, cmd)
+	case C.WRITE_6, C.WRITE_10, C.WRITE_12, C.WRITE_16:
+		return s.handleWriteCommand(dev, cmd)
 	default:
 		log.Errorf("unknown command 0x%x\n", scsiCmd)
 	}
