@@ -19,23 +19,27 @@ import "C"
 import "unsafe"
 
 import (
-	"io"
-	"os"
-	"strings"
 	"sync"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/yasker/go-tcmu/util"
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+
+	"github.com/yasker/go-tcmu/block"
 )
 
 var (
 	ready bool = false
 
 	log = logrus.WithFields(logrus.Fields{"pkg": "main"})
+
+	address = "localhost:5000"
 )
 
 type TcmuState struct {
-	file      *os.File
+	volume    string
+	client    block.TransferClient
+	conn      *grpc.ClientConn
 	lbas      int64
 	blockSize int
 	mutex     *sync.Mutex
@@ -71,18 +75,16 @@ func shOpen(dev TcmuDevice) int {
 		log.Errorln("Cannot find configuration string")
 		return -C.EINVAL
 	}
-	path := strings.TrimPrefix(cfgString, "file/")
-	log.Debugln("File at ", path)
+	//id := strings.TrimPrefix(cfgString, "file/")
+	//TODO check volume name here
 
-	if err := util.FindOrCreateDisk(path, size); err != nil {
-		log.Errorln("Fail to find or create disk", err.Error())
-		return -C.EINVAL
-	}
-	state.file, err = os.OpenFile(path, os.O_RDWR, 0644)
+	state.conn, err = grpc.Dial(address, grpc.WithInsecure())
 	if err != nil {
-		log.Errorln("Fail to open disk file", err.Error())
-		return -C.EINVAL
+		log.Fatalf("Cannot connect to replica, %v", err)
 	}
+
+	state.client = block.NewTransferClient(state.conn)
+
 	go state.HandleRequest(dev)
 
 	log.Debugln("Device added")
@@ -90,7 +92,7 @@ func shOpen(dev TcmuDevice) int {
 }
 
 func (s *TcmuState) HandleRequest(dev TcmuDevice) {
-	defer s.file.Close()
+	defer s.conn.Close()
 	for true {
 		C.tcmulib_processing_start(dev)
 		cmd := C.tcmulib_get_next_command(dev)
@@ -110,33 +112,16 @@ func (s *TcmuState) handleReadCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	/*
-		//Go managed buffer is 40% slower?
-		buf := make([]byte, length, length)
-		if buf == nil {
-			log.Errorln("read failed: fail to allocate buffer")
-			return CmdSetMediumError(cmd)
-		}
-
-		if _, err := s.file.ReadAt(buf, offset); err != nil && err != io.EOF {
-			log.Errorln("read failed: ", err.Error())
-			return CmdSetMediumError(cmd)
-		}
-	*/
-
-	buf := C.allocate_buffer(C.int(length))
-	if buf == nil {
-		log.Errorln("read failed: fail to allocate buffer")
-		return CmdSetMediumError(cmd)
-	}
-	defer C.free(buf)
-	goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
-	if _, err := s.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
+	resp, err := s.client.Read(context.Background(), &block.ReadRequest{
+		Offset: offset,
+		Length: int64(length),
+	})
+	if err != nil {
 		log.Errorln("read failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
 
-	copied := CmdMemcpyIntoIovec(cmd, buf, length)
+	copied := CmdMemcpyIntoIovec(cmd, resp.Context, length)
 	if copied != length {
 		log.Errorln("read failed: unable to complete buffer copy ")
 		return CmdSetMediumError(cmd)
@@ -148,33 +133,21 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	/*
-		//Go managed buffer is 40% slower?
-		buf := make([]byte, length, length)
-		if buf == nil {
-			log.Errorln("read failed: fail to allocate buffer")
-			return CmdSetMediumError(cmd)
-		}
-		copied := CmdMemcpyFromIovec(cmd, buf, length)
-		if copied != length {
-			log.Errorln("write failed: unable to complete buffer copy ")
-			return CmdSetMediumError(cmd)
-		}
-	*/
-	buf := C.allocate_buffer(C.int(length))
+	buf := make([]byte, length, length)
 	if buf == nil {
 		log.Errorln("read failed: fail to allocate buffer")
 		return CmdSetMediumError(cmd)
 	}
-	defer C.free(buf)
 	copied := CmdMemcpyFromIovec(cmd, buf, length)
 	if copied != length {
 		log.Errorln("write failed: unable to complete buffer copy ")
 		return CmdSetMediumError(cmd)
 	}
-	goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
 
-	if _, err := s.file.WriteAt(goBuf, offset); err != nil {
+	if _, err := s.client.Write(context.Background(), &block.WriteRequest{
+		Offset:  offset,
+		Context: buf,
+	}); err != nil {
 		log.Errorln("write failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
