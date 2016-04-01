@@ -1,8 +1,8 @@
 package main
 
 /*
-#cgo LDFLAGS: -L ./libs -ltcmu
-#cgo CFLAGS: -I ./includes
+#cgo LDFLAGS: -L ../libs -ltcmu
+#cgo CFLAGS: -I ../includes
 
 #include <errno.h>
 #include <stdlib.h>
