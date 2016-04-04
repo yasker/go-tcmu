@@ -19,12 +19,16 @@ import "C"
 import "unsafe"
 
 import (
-	"io"
+	//"io"
 	"os"
 	"strings"
 	"sync"
 
 	"github.com/Sirupsen/logrus"
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+
+	"github.com/yasker/go-tcmu/block"
 	"github.com/yasker/go-tcmu/util"
 )
 
@@ -32,6 +36,10 @@ var (
 	ready bool = false
 
 	log = logrus.WithFields(logrus.Fields{"pkg": "main"})
+
+	address = "localhost:5000"
+
+	client block.TransferClient
 )
 
 type TcmuState struct {
@@ -131,12 +139,22 @@ func (s *TcmuState) handleReadCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	}
 	defer C.free(buf)
 	goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
-	if _, err := s.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
+	//if _, err := s.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
+	resp, err := client.Read(context.Background(), &block.ReadRequest{
+		Offset: offset,
+		Length: int64(length),
+	})
+	if err != nil {
 		log.Errorln("read failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
+	copied := copy(goBuf, resp.Context)
+	if copied != length {
+		log.Errorln("read failed: not enough returned")
+		return CmdSetMediumError(cmd)
+	}
 
-	copied := CmdMemcpyIntoIovec(cmd, buf, length)
+	copied = CmdMemcpyIntoIovec(cmd, buf, length)
 	if copied != length {
 		log.Errorln("read failed: unable to complete buffer copy ")
 		return CmdSetMediumError(cmd)
@@ -174,7 +192,12 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	}
 	goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
 
-	if _, err := s.file.WriteAt(goBuf, offset); err != nil {
+	//if _, err := s.file.WriteAt(goBuf, offset); err != nil {
+	if _, err := client.Write(context.Background(), &block.WriteRequest{
+		Offset:  offset,
+		Length:  int64(length),
+		Context: goBuf,
+	}); err != nil {
 		log.Errorln("write failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
@@ -221,6 +244,13 @@ func shClose(dev TcmuDevice) {
 }
 
 func main() {
+	conn, err := grpc.Dial(address, grpc.WithInsecure())
+	if err != nil {
+		log.Fatalf("Cannot connect to replica, %v", err)
+	}
+	defer conn.Close()
+	client = block.NewTransferClient(conn)
+
 	logrus.SetLevel(logrus.DebugLevel)
 
 	cxt := C.tcmu_init()
