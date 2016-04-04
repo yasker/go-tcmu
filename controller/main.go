@@ -25,7 +25,7 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
-	"github.com/yasker/go-tcmu/block"
+	"github.com/yasker/longhorn/block"
 )
 
 var (
