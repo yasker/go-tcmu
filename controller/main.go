@@ -118,28 +118,6 @@ func (s *TcmuState) handleReadCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	/*
-		//Go managed buffer is 40% slower?
-		buf := make([]byte, length, length)
-		if buf == nil {
-			log.Errorln("read failed: fail to allocate buffer")
-			return CmdSetMediumError(cmd)
-		}
-
-		if _, err := s.file.ReadAt(buf, offset); err != nil && err != io.EOF {
-			log.Errorln("read failed: ", err.Error())
-			return CmdSetMediumError(cmd)
-		}
-	*/
-
-	buf := C.allocate_buffer(C.int(length))
-	if buf == nil {
-		log.Errorln("read failed: fail to allocate buffer")
-		return CmdSetMediumError(cmd)
-	}
-	defer C.free(buf)
-	goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
-	//if _, err := s.file.ReadAt(goBuf, offset); err != nil && err != io.EOF {
 	resp, err := client.Read(context.Background(), &block.ReadRequest{
 		Offset: offset,
 		Length: int64(length),
@@ -148,13 +126,8 @@ func (s *TcmuState) handleReadCommand(dev TcmuDevice, cmd TcmuCommand) int {
 		log.Errorln("read failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
-	copied := copy(goBuf, resp.Context)
-	if copied != length {
-		log.Errorln("read failed: not enough returned")
-		return CmdSetMediumError(cmd)
-	}
 
-	copied = CmdMemcpyIntoIovec(cmd, buf, length)
+	copied := CmdMemcpyIntoIovec(cmd, resp.Context, length)
 	if copied != length {
 		log.Errorln("read failed: unable to complete buffer copy ")
 		return CmdSetMediumError(cmd)
@@ -166,37 +139,21 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	/*
-		//Go managed buffer is 40% slower?
-		buf := make([]byte, length, length)
-		if buf == nil {
-			log.Errorln("read failed: fail to allocate buffer")
-			return CmdSetMediumError(cmd)
-		}
-		copied := CmdMemcpyFromIovec(cmd, buf, length)
-		if copied != length {
-			log.Errorln("write failed: unable to complete buffer copy ")
-			return CmdSetMediumError(cmd)
-		}
-	*/
-	buf := C.allocate_buffer(C.int(length))
+	buf := make([]byte, length, length)
 	if buf == nil {
 		log.Errorln("read failed: fail to allocate buffer")
 		return CmdSetMediumError(cmd)
 	}
-	defer C.free(buf)
 	copied := CmdMemcpyFromIovec(cmd, buf, length)
 	if copied != length {
 		log.Errorln("write failed: unable to complete buffer copy ")
 		return CmdSetMediumError(cmd)
 	}
-	goBuf := (*[1 << 30]byte)(unsafe.Pointer(buf))[:length:length]
 
-	//if _, err := s.file.WriteAt(goBuf, offset); err != nil {
 	if _, err := client.Write(context.Background(), &block.WriteRequest{
 		Offset:  offset,
 		Length:  int64(length),
-		Context: goBuf,
+		Context: buf,
 	}); err != nil {
 		log.Errorln("write failed: ", err.Error())
 		return CmdSetMediumError(cmd)
