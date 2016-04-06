@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -18,8 +19,7 @@ var (
 	size        = flag.Int("size", 1000, "size for read/write, in MB")
 	mode        = flag.String("mode", "write", "read or write")
 	requestSize = flag.Int("request-size", 4096, "request size of each IO")
-
-	done = make(chan bool, 1)
+	workers     = flag.Int("workers", 128, "worker numbers")
 )
 
 func main() {
@@ -40,28 +40,48 @@ func main() {
 
 	client := block.NewTransferClient(conn)
 
-	go processData(client, *mode)
-
 	log.Info("Start processing")
-	<-done
+
+	processData(client)
+
 	log.Info("Finish processing")
 }
 
-func processData(client block.TransferClient, mode string) {
-	var (
-		offset int64
-		err    error
-	)
+func processData(client block.TransferClient) {
 	before := time.Now()
+	reqSize := int64(*requestSize)
+
+	co := make(chan int64, *workers)
+	wg := sync.WaitGroup{}
+	wg.Add(*workers)
+	for i := 0; i < *workers; i++ {
+		go func() {
+			defer wg.Done()
+			process(client, *mode, reqSize, co)
+		}()
+	}
 
 	sizeInBytes := int64(*size * 1024 * 1024)
-	reqSize := int64(*requestSize)
-	buf := make([]byte, reqSize, reqSize)
-	for offset < sizeInBytes-reqSize {
+	for offset := int64(0); offset < sizeInBytes-reqSize; offset += reqSize {
+		co <- offset
+	}
+	close(co)
+	wg.Wait()
+
+	seconds := time.Now().Sub(before).Seconds()
+	bandwidth := float64(sizeInBytes) / seconds / 1024 / 1024
+	log.Debugf("Processing done, speed at %.2f MB/second", bandwidth)
+}
+
+func process(client block.TransferClient, mode string, reqSize int64, co chan int64) {
+	for offset := range co {
+		var err error
 		if offset%(1024*1024*100) == 0 {
 			log.Debug("Processing offset ", offset)
 		}
+
 		if mode == "write" {
+			buf := make([]byte, reqSize, reqSize)
 			_, err = client.Write(context.Background(), &block.WriteRequest{
 				Offset:  offset,
 				Context: buf,
@@ -75,10 +95,5 @@ func processData(client block.TransferClient, mode string) {
 		if err != nil {
 			log.Errorln("Fail to process data from offset ", offset)
 		}
-		offset += reqSize
 	}
-	seconds := time.Now().Sub(before).Seconds()
-	bandwidth := float64(sizeInBytes) / seconds / 1024 / 1024
-	log.Debugf("Processing done, speed at %.2f MB/second", bandwidth)
-	done <- true
 }
