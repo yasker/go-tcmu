@@ -26,6 +26,10 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/yasker/longhorn/block"
+
+	"flag"
+	"os"
+	"runtime/pprof"
 )
 
 var (
@@ -34,6 +38,8 @@ var (
 	log = logrus.WithFields(logrus.Fields{"pkg": "main"})
 
 	address = "localhost:5000"
+
+	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
 )
 
 type TcmuState struct {
@@ -195,6 +201,17 @@ func shClose(dev TcmuDevice) {
 
 func main() {
 	logrus.SetLevel(logrus.DebugLevel)
+
+	flag.Parse()
+	if *cpuprofile != "" {
+		log.Debug("Output cpuprofile to %v", *cpuprofile)
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	cxt := C.tcmu_init()
 	if cxt == nil {
