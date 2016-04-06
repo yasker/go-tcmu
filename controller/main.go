@@ -19,7 +19,9 @@ import "C"
 import "unsafe"
 
 import (
+	"os/signal"
 	"sync"
+	"syscall"
 
 	"github.com/Sirupsen/logrus"
 	"golang.org/x/net/context"
@@ -40,6 +42,9 @@ var (
 	address = "localhost:5000"
 
 	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+
+	sigs chan os.Signal
+	done chan bool
 )
 
 type TcmuState struct {
@@ -94,6 +99,8 @@ func shOpen(dev TcmuDevice) int {
 	go state.HandleRequest(dev)
 
 	log.Debugln("Device added")
+
+	ready = true
 	return 0
 }
 
@@ -199,6 +206,13 @@ func shClose(dev TcmuDevice) {
 	log.Debugln("Device removed")
 }
 
+func handleSignal() {
+	sig := <-sigs
+	log.Infoln("Shutting down process, due to received signal ", sig)
+	pprof.StopCPUProfile()
+	done <- true
+}
+
 func main() {
 	logrus.SetLevel(logrus.DebugLevel)
 
@@ -210,8 +224,13 @@ func main() {
 			log.Fatal(err)
 		}
 		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
 	}
+
+	sigs = make(chan os.Signal, 1)
+	done = make(chan bool, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	go handleSignal()
 
 	cxt := C.tcmu_init()
 	if cxt == nil {
@@ -222,4 +241,8 @@ func main() {
 		result := C.tcmu_poll_master_fd(cxt)
 		log.Debugln("Poll master fd one more time, last result ", result)
 	}
+
+	log.Infoln("Waiting for process")
+	<-done
+	log.Infoln("Shutdown complete")
 }
