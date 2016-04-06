@@ -30,7 +30,8 @@ func main() {
 		log.Fatal("Invalid mode type ", *mode)
 	}
 
-	log.Infof("Mode %v, size %vMB, request size %v bytes\n", *mode, *size, *requestSize)
+	log.Infof("Mode %v, size %vMB, request size %v bytes, %v workers\n",
+		*mode, *size, *requestSize, *workers)
 
 	conn, err := grpc.Dial(address, grpc.WithInsecure())
 	if err != nil {
@@ -70,7 +71,9 @@ func processData(client block.TransferClient) {
 
 	seconds := time.Now().Sub(before).Seconds()
 	bandwidth := float64(sizeInBytes) / seconds / 1024 / 1024
-	log.Debugf("Processing done, speed at %.2f MB/second", bandwidth)
+	iops := sizeInBytes / int64(seconds) / reqSize
+	log.Debugf("Processing done, speed at %.2f MB/second, %v request/seconds",
+		bandwidth, iops)
 }
 
 func process(client block.TransferClient, mode string, reqSize int64, co chan int64) {
