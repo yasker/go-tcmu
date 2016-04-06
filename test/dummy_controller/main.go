@@ -90,10 +90,13 @@ func process(client block.TransferClient, mode string, reqSize int64, co chan in
 				Context: buf,
 			})
 		} else {
-			_, err = client.Read(context.Background(), &block.ReadRequest{
+			var resp *block.ReadResponse
+			buf := make([]byte, reqSize, reqSize)
+			resp, err = client.Read(context.Background(), &block.ReadRequest{
 				Offset: offset,
 				Length: reqSize,
 			})
+			copy(buf, resp.Context)
 		}
 		if err != nil {
 			log.Errorln("Fail to process data from offset ", offset)
