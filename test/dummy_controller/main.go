@@ -2,16 +2,15 @@ package main
 
 import (
 	"flag"
+	"net"
 	"os"
 	"runtime/pprof"
-	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc"
 
 	"github.com/yasker/longhorn/block"
+	"github.com/yasker/longhorn/comm"
 )
 
 var (
@@ -45,21 +44,95 @@ func main() {
 	log.Infof("Mode %v, size %vMB, request size %v bytes, %v workers\n",
 		*mode, *size, *requestSize, *workers)
 
-	conn, err := grpc.Dial(address, grpc.WithInsecure())
+	addr, err := net.ResolveTCPAddr("tcp4", address)
+	if err != nil {
+		log.Fatalf("failed to resolve ", address, err)
+	}
+	conn, err := net.DialTCP("tcp", nil, addr)
 	if err != nil {
 		log.Fatalf("Cannot connect to replica, %v", err)
 	}
 	defer conn.Close()
 
-	client := block.NewTransferClient(conn)
-
 	log.Info("Start processing")
 
-	processData(client)
+	processData(conn)
 
 	log.Info("Finish processing")
 }
 
+func processData(conn *net.TCPConn) {
+	before := time.Now()
+	reqSize := int64(*requestSize)
+	sizeInBytes := int64(*size * 1024 * 1024)
+
+	for offset := int64(0); offset < sizeInBytes-reqSize; offset += reqSize {
+		var (
+			resp *block.Response
+			err  error
+		)
+		if offset%(1024*1024*100) == 0 {
+			log.Debug("Processing offset ", offset)
+		}
+
+		if *mode == "write" {
+			buf := make([]byte, reqSize, reqSize)
+			if err := comm.SendRequest(conn, &block.Request{
+				Type:    comm.MSG_TYPE_WRITE_REQUEST,
+				Offset:  offset,
+				Context: buf,
+			}); err != nil {
+				log.Error("Fail to send request:", err)
+				continue
+			}
+			resp, err = comm.ReadResponse(conn)
+			if err != nil {
+				log.Error("Fail to read response:", err)
+				continue
+			}
+			if resp.Type != comm.MSG_TYPE_WRITE_RESPONSE {
+				log.Error("Write failed: ", resp.Type)
+				continue
+			}
+			if resp.Result != "Success" {
+				log.Error("Write failed: ", resp.Result)
+				continue
+			}
+		} else {
+			buf := make([]byte, reqSize, reqSize)
+			if err := comm.SendRequest(conn, &block.Request{
+				Type:   comm.MSG_TYPE_READ_REQUEST,
+				Offset: offset,
+				Length: reqSize,
+			}); err != nil {
+				log.Error("Fail to send request:", err)
+				continue
+			}
+			resp, err = comm.ReadResponse(conn)
+			if err != nil {
+				log.Error("Fail to read response:", err)
+				continue
+			}
+			if resp.Type != comm.MSG_TYPE_READ_RESPONSE {
+				log.Error("Wrong read response: ", resp.Type)
+				continue
+			}
+			if resp.Result != "Success" {
+				log.Error("Write failed: ", resp.Result)
+				continue
+			}
+			copy(buf, resp.Context)
+		}
+	}
+
+	seconds := time.Now().Sub(before).Seconds()
+	bandwidth := float64(sizeInBytes) / seconds / 1024 / 1024
+	iops := sizeInBytes / int64(seconds) / reqSize
+	log.Debugf("Processing done, speed at %.2f MB/second, %v request/seconds",
+		bandwidth, iops)
+}
+
+/*
 func processData(client block.TransferClient) {
 	before := time.Now()
 	reqSize := int64(*requestSize)
@@ -115,3 +188,4 @@ func process(client block.TransferClient, mode string, reqSize int64, co chan in
 		}
 	}
 }
+*/

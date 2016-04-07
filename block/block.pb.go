@@ -9,6 +9,8 @@ It is generated from these files:
 	block.proto
 
 It has these top-level messages:
+	Request
+	Response
 	ReadRequest
 	ReadResponse
 	WriteRequest
@@ -20,11 +22,6 @@ import proto "github.com/golang/protobuf/proto"
 import fmt "fmt"
 import math "math"
 
-import (
-	context "golang.org/x/net/context"
-	grpc "google.golang.org/grpc"
-)
-
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal
 var _ = fmt.Errorf
@@ -34,6 +31,29 @@ var _ = math.Inf
 // is compatible with the proto package it is being compiled against.
 const _ = proto.ProtoPackageIsVersion1
 
+type Request struct {
+	Type    int64  `protobuf:"varint,1,opt,name=type" json:"type,omitempty"`
+	Offset  int64  `protobuf:"varint,2,opt,name=offset" json:"offset,omitempty"`
+	Length  int64  `protobuf:"varint,3,opt,name=length" json:"length,omitempty"`
+	Context []byte `protobuf:"bytes,4,opt,name=context,proto3" json:"context,omitempty"`
+}
+
+func (m *Request) Reset()                    { *m = Request{} }
+func (m *Request) String() string            { return proto.CompactTextString(m) }
+func (*Request) ProtoMessage()               {}
+func (*Request) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{0} }
+
+type Response struct {
+	Type    uint64 `protobuf:"fixed64,1,opt,name=type" json:"type,omitempty"`
+	Result  string `protobuf:"bytes,2,opt,name=result" json:"result,omitempty"`
+	Context []byte `protobuf:"bytes,3,opt,name=context,proto3" json:"context,omitempty"`
+}
+
+func (m *Response) Reset()                    { *m = Response{} }
+func (m *Response) String() string            { return proto.CompactTextString(m) }
+func (*Response) ProtoMessage()               {}
+func (*Response) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{1} }
+
 type ReadRequest struct {
 	Offset int64 `protobuf:"varint,1,opt,name=offset" json:"offset,omitempty"`
 	Length int64 `protobuf:"varint,2,opt,name=length" json:"length,omitempty"`
@@ -42,7 +62,7 @@ type ReadRequest struct {
 func (m *ReadRequest) Reset()                    { *m = ReadRequest{} }
 func (m *ReadRequest) String() string            { return proto.CompactTextString(m) }
 func (*ReadRequest) ProtoMessage()               {}
-func (*ReadRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{0} }
+func (*ReadRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{2} }
 
 type ReadResponse struct {
 	Result  string `protobuf:"bytes,1,opt,name=result" json:"result,omitempty"`
@@ -52,7 +72,7 @@ type ReadResponse struct {
 func (m *ReadResponse) Reset()                    { *m = ReadResponse{} }
 func (m *ReadResponse) String() string            { return proto.CompactTextString(m) }
 func (*ReadResponse) ProtoMessage()               {}
-func (*ReadResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{1} }
+func (*ReadResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{3} }
 
 type WriteRequest struct {
 	Offset  int64  `protobuf:"varint,1,opt,name=offset" json:"offset,omitempty"`
@@ -62,7 +82,7 @@ type WriteRequest struct {
 func (m *WriteRequest) Reset()                    { *m = WriteRequest{} }
 func (m *WriteRequest) String() string            { return proto.CompactTextString(m) }
 func (*WriteRequest) ProtoMessage()               {}
-func (*WriteRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{2} }
+func (*WriteRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{4} }
 
 type WriteResponse struct {
 	Result string `protobuf:"bytes,1,opt,name=result" json:"result,omitempty"`
@@ -71,120 +91,33 @@ type WriteResponse struct {
 func (m *WriteResponse) Reset()                    { *m = WriteResponse{} }
 func (m *WriteResponse) String() string            { return proto.CompactTextString(m) }
 func (*WriteResponse) ProtoMessage()               {}
-func (*WriteResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{3} }
+func (*WriteResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{5} }
 
 func init() {
+	proto.RegisterType((*Request)(nil), "block.Request")
+	proto.RegisterType((*Response)(nil), "block.Response")
 	proto.RegisterType((*ReadRequest)(nil), "block.ReadRequest")
 	proto.RegisterType((*ReadResponse)(nil), "block.ReadResponse")
 	proto.RegisterType((*WriteRequest)(nil), "block.WriteRequest")
 	proto.RegisterType((*WriteResponse)(nil), "block.WriteResponse")
 }
 
-// Reference imports to suppress errors if they are not otherwise used.
-var _ context.Context
-var _ grpc.ClientConn
-
-// This is a compile-time assertion to ensure that this generated file
-// is compatible with the grpc package it is being compiled against.
-const _ = grpc.SupportPackageIsVersion1
-
-// Client API for Transfer service
-
-type TransferClient interface {
-	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
-	Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
-}
-
-type transferClient struct {
-	cc *grpc.ClientConn
-}
-
-func NewTransferClient(cc *grpc.ClientConn) TransferClient {
-	return &transferClient{cc}
-}
-
-func (c *transferClient) Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error) {
-	out := new(ReadResponse)
-	err := grpc.Invoke(ctx, "/block.Transfer/Read", in, out, c.cc, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *transferClient) Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error) {
-	out := new(WriteResponse)
-	err := grpc.Invoke(ctx, "/block.Transfer/Write", in, out, c.cc, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// Server API for Transfer service
-
-type TransferServer interface {
-	Read(context.Context, *ReadRequest) (*ReadResponse, error)
-	Write(context.Context, *WriteRequest) (*WriteResponse, error)
-}
-
-func RegisterTransferServer(s *grpc.Server, srv TransferServer) {
-	s.RegisterService(&_Transfer_serviceDesc, srv)
-}
-
-func _Transfer_Read_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error) (interface{}, error) {
-	in := new(ReadRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	out, err := srv.(TransferServer).Read(ctx, in)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func _Transfer_Write_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error) (interface{}, error) {
-	in := new(WriteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	out, err := srv.(TransferServer).Write(ctx, in)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-var _Transfer_serviceDesc = grpc.ServiceDesc{
-	ServiceName: "block.Transfer",
-	HandlerType: (*TransferServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "Read",
-			Handler:    _Transfer_Read_Handler,
-		},
-		{
-			MethodName: "Write",
-			Handler:    _Transfer_Write_Handler,
-		},
-	},
-	Streams: []grpc.StreamDesc{},
-}
-
 var fileDescriptor0 = []byte{
-	// 206 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0xe2, 0xe2, 0x4e, 0xca, 0xc9, 0x4f,
-	0xce, 0xd6, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0x62, 0x05, 0x73, 0x94, 0x6c, 0xb9, 0xb8, 0x83,
-	0x52, 0x13, 0x53, 0x82, 0x52, 0x0b, 0x4b, 0x53, 0x8b, 0x4b, 0x84, 0xc4, 0xb8, 0xd8, 0xf2, 0xd3,
-	0xd2, 0x8a, 0x53, 0x4b, 0x24, 0x18, 0x15, 0x18, 0x35, 0x98, 0x83, 0xa0, 0x3c, 0x90, 0x78, 0x4e,
-	0x6a, 0x5e, 0x7a, 0x49, 0x86, 0x04, 0x13, 0x44, 0x1c, 0xc2, 0x53, 0x72, 0xe0, 0xe2, 0x81, 0x68,
-	0x2f, 0x2e, 0xc8, 0xcf, 0x2b, 0x4e, 0x05, 0xa9, 0x2b, 0x4a, 0x2d, 0x2e, 0xcd, 0x81, 0xe8, 0xe7,
-	0x0c, 0x82, 0xf2, 0x84, 0x24, 0xb8, 0xd8, 0x93, 0xf3, 0xf3, 0x4a, 0x52, 0x2b, 0x4a, 0xc0, 0x06,
-	0xf0, 0x04, 0xc1, 0xb8, 0x20, 0x13, 0xc2, 0x8b, 0x32, 0x4b, 0x52, 0x09, 0xb9, 0x00, 0xb7, 0x09,
-	0xea, 0x5c, 0xbc, 0x50, 0x13, 0xf0, 0x3b, 0xc2, 0xa8, 0x98, 0x8b, 0x23, 0xa4, 0x28, 0x31, 0xaf,
-	0x38, 0x2d, 0xb5, 0x48, 0xc8, 0x90, 0x8b, 0x05, 0xe4, 0x70, 0x21, 0x21, 0x3d, 0x48, 0xa0, 0x20,
-	0x05, 0x82, 0x94, 0x30, 0x8a, 0x18, 0xc4, 0x50, 0x25, 0x06, 0x21, 0x13, 0x2e, 0x56, 0xb0, 0x3d,
-	0x42, 0x30, 0x79, 0x64, 0x77, 0x4b, 0x89, 0xa0, 0x0a, 0xc2, 0x74, 0x25, 0xb1, 0x81, 0x83, 0xdb,
-	0x18, 0x10, 0x00, 0x00, 0xff, 0xff, 0xe9, 0xe3, 0xaf, 0x30, 0x7d, 0x01, 0x00, 0x00,
+	// 255 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0x84, 0x92, 0xcd, 0x4b, 0x03, 0x31,
+	0x10, 0xc5, 0xdd, 0x8f, 0x6e, 0xeb, 0xb4, 0x5e, 0x46, 0x91, 0xd0, 0x93, 0xec, 0x45, 0x4f, 0x05,
+	0x3f, 0xae, 0x82, 0x7f, 0x82, 0x04, 0xc1, 0x73, 0x5b, 0x67, 0xab, 0xb8, 0x6c, 0xd6, 0x64, 0x0a,
+	0xfa, 0xdf, 0xdb, 0xe6, 0x83, 0x4d, 0x0e, 0xab, 0xb7, 0xbc, 0x37, 0xcc, 0x7b, 0x3f, 0x92, 0xc0,
+	0x7c, 0xd3, 0xaa, 0xed, 0xe7, 0xaa, 0xd7, 0x8a, 0x15, 0x4e, 0xac, 0xa8, 0x77, 0x30, 0x95, 0xf4,
+	0xb5, 0x27, 0xc3, 0x88, 0x50, 0xf2, 0x4f, 0x4f, 0x22, 0xbb, 0xca, 0x6e, 0x0a, 0x69, 0xcf, 0x78,
+	0x09, 0x95, 0x6a, 0x1a, 0x43, 0x2c, 0x72, 0xeb, 0x7a, 0x75, 0xf4, 0x5b, 0xea, 0x76, 0xfc, 0x2e,
+	0x0a, 0xe7, 0x3b, 0x85, 0x02, 0xa6, 0x5b, 0xd5, 0x31, 0x7d, 0xb3, 0x28, 0x0f, 0x83, 0x85, 0x0c,
+	0xb2, 0x7e, 0x86, 0x99, 0x24, 0xd3, 0xab, 0xce, 0x50, 0xd2, 0x54, 0x0d, 0x4d, 0x9a, 0xcc, 0xbe,
+	0x75, 0x4d, 0xa7, 0xd2, 0xab, 0x38, 0xb1, 0x48, 0x13, 0x1f, 0x61, 0x2e, 0x69, 0xfd, 0x16, 0xf0,
+	0x07, 0xd4, 0x6c, 0x04, 0x35, 0x8f, 0x51, 0xeb, 0x27, 0x58, 0xb8, 0x75, 0x0f, 0x35, 0x00, 0x64,
+	0x63, 0x00, 0x79, 0x0a, 0x70, 0x48, 0x78, 0xd5, 0x1f, 0x4c, 0xff, 0x11, 0x8c, 0x27, 0x5c, 0xc3,
+	0x99, 0x4f, 0xf8, 0x1b, 0xe2, 0xce, 0xc0, 0xec, 0x45, 0xaf, 0x3b, 0xd3, 0x90, 0xc6, 0x5b, 0x28,
+	0x8f, 0xe0, 0x88, 0x2b, 0xf7, 0x9e, 0xd1, 0x25, 0x2c, 0xcf, 0x13, 0xcf, 0x85, 0xd6, 0x27, 0xf8,
+	0x00, 0x13, 0xdb, 0x83, 0x61, 0x1e, 0x73, 0x2f, 0x2f, 0x52, 0x33, 0x6c, 0x6d, 0x2a, 0xfb, 0x53,
+	0xee, 0x7f, 0x03, 0x00, 0x00, 0xff, 0xff, 0x4f, 0x79, 0x7a, 0xbc, 0x38, 0x02, 0x00, 0x00,
 }

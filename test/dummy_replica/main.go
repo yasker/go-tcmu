@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -8,10 +9,9 @@ import (
 	"syscall"
 
 	"github.com/Sirupsen/logrus"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc"
 
 	"github.com/yasker/longhorn/block"
+	"github.com/yasker/longhorn/comm"
 )
 
 const (
@@ -25,12 +25,12 @@ var (
 	cpuprofile = "dummy_replica.pf"
 
 	sigs chan os.Signal
-	done chan bool
+	done bool
 )
 
 type server struct{}
 
-func (s *server) Read(cxt context.Context, req *block.ReadRequest) (*block.ReadResponse, error) {
+func Read(req *block.ReadRequest) (*block.ReadResponse, error) {
 	buf := make([]byte, req.Length)
 	resp := &block.ReadResponse{
 		Result:  "Success",
@@ -39,7 +39,7 @@ func (s *server) Read(cxt context.Context, req *block.ReadRequest) (*block.ReadR
 	return resp, nil
 }
 
-func (s *server) Write(cxt context.Context, req *block.WriteRequest) (*block.WriteResponse, error) {
+func Write(req *block.WriteRequest) (*block.WriteResponse, error) {
 	buf := make([]byte, len(req.Context))
 	copy(buf, req.Context)
 	resp := &block.WriteResponse{
@@ -53,14 +53,55 @@ func handleSignal() {
 	sig := <-sigs
 	log.Infoln("Shutting down process, due to received signal ", sig)
 	pprof.StopCPUProfile()
-	done <- true
+	os.Exit(0)
+}
+
+func serve(conn *net.TCPConn) {
+	var resp *block.Response
+
+	for {
+		req, err := comm.ReadRequest(conn)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Error("Fail to read request: ", err)
+			return
+		}
+
+		if req.Type == comm.MSG_TYPE_READ_REQUEST {
+			buf := make([]byte, req.Length)
+			resp = &block.Response{
+				Type:    comm.MSG_TYPE_READ_RESPONSE,
+				Result:  "Success",
+				Context: buf,
+			}
+		} else if req.Type == comm.MSG_TYPE_WRITE_REQUEST {
+			buf := make([]byte, len(req.Context))
+			copy(buf, req.Context)
+			resp = &block.Response{
+				Type:   comm.MSG_TYPE_WRITE_RESPONSE,
+				Result: "Success",
+			}
+
+		} else {
+			log.Error("Invalid request type: ", req.Type)
+			return
+		}
+
+		if err := comm.SendResponse(conn, resp); err != nil {
+			log.Error("Fail to send response: ", err)
+			return
+		}
+	}
 }
 
 func main() {
 	logrus.SetLevel(logrus.DebugLevel)
 
 	sigs = make(chan os.Signal, 1)
-	done = make(chan bool, 1)
+	done = false
+
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go handleSignal()
 
@@ -71,16 +112,21 @@ func main() {
 	}
 	pprof.StartCPUProfile(f)
 
-	l, err := net.Listen("tcp", port)
+	addr, err := net.ResolveTCPAddr("tcp4", port)
+	if err != nil {
+		log.Fatalf("failed to resolve ", port, err)
+	}
+	l, err := net.ListenTCP("tcp", addr)
 	if err != nil {
 		log.Fatalf("failed to listen to: %v", err)
 	}
 
-	s := grpc.NewServer()
-	server := &server{}
-
-	block.RegisterTransferServer(s, server)
-	go s.Serve(l)
-
-	<-done
+	for !done {
+		conn, err := l.AcceptTCP()
+		if err != nil {
+			log.Errorf("failed to accept connection %v", err)
+			continue
+		}
+		go serve(conn)
+	}
 }
