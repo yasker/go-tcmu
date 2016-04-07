@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"os"
+	"runtime/pprof"
 	"sync"
 	"time"
 
@@ -13,18 +15,28 @@ import (
 )
 
 var (
-	log     = logrus.WithFields(logrus.Fields{"pkg": "main"})
+	log     = logrus.WithFields(logrus.Fields{"pkg": "dummy_controller"})
 	address = "localhost:5000"
 
 	size        = flag.Int("size", 1000, "size for read/write, in MB")
 	mode        = flag.String("mode", "write", "read or write")
 	requestSize = flag.Int("request-size", 4096, "request size of each IO")
 	workers     = flag.Int("workers", 128, "worker numbers")
+
+	cpuprofile = "dummy_controller.pf"
 )
 
 func main() {
 	logrus.SetLevel(logrus.DebugLevel)
 	flag.Parse()
+
+	log.Debug("Output cpuprofile to %v", cpuprofile)
+	f, err := os.Create(cpuprofile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	pprof.StartCPUProfile(f)
+	defer pprof.StopCPUProfile()
 
 	if *mode != "read" && *mode != "write" {
 		log.Fatal("Invalid mode type ", *mode)
