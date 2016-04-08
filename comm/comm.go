@@ -103,3 +103,13 @@ func ReadResponse(conn io.Reader) (*block.Response, error) {
 	}
 	return resp, nil
 }
+
+func SendData(conn io.Writer, buf []byte) error {
+	_, err := conn.Write(buf)
+	return err
+}
+
+func ReceiveData(conn io.Reader, buf []byte) error {
+	_, err := conn.Read(buf)
+	return err
+}

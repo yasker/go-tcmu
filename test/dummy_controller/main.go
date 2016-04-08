@@ -78,13 +78,18 @@ func processData(conn *net.TCPConn) {
 		if *mode == "write" {
 			buf := make([]byte, reqSize, reqSize)
 			if err := comm.SendRequest(conn, &block.Request{
-				Type:    comm.MSG_TYPE_WRITE_REQUEST,
-				Offset:  offset,
-				Context: buf,
+				Type:   comm.MSG_TYPE_WRITE_REQUEST,
+				Offset: offset,
+				Length: reqSize,
 			}); err != nil {
 				log.Error("Fail to send request:", err)
 				continue
 			}
+			if err := comm.SendData(conn, buf); err != nil {
+				log.Error("Fail to send data:", err)
+				continue
+			}
+
 			resp, err = comm.ReadResponse(conn)
 			if err != nil {
 				log.Error("Fail to read response:", err)
@@ -121,7 +126,14 @@ func processData(conn *net.TCPConn) {
 				log.Error("Write failed: ", resp.Result)
 				continue
 			}
-			copy(buf, resp.Context)
+			if resp.Length != reqSize {
+				log.Error("Length not match!")
+				continue
+			}
+			if err := comm.ReceiveData(conn, buf); err != nil {
+				log.Error("Receive data failed:", err)
+				continue
+			}
 		}
 	}
 

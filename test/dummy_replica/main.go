@@ -69,21 +69,24 @@ func serve(conn *net.TCPConn) {
 			return
 		}
 
+		attachData := false
+		buf := make([]byte, req.Length)
 		if req.Type == comm.MSG_TYPE_READ_REQUEST {
-			buf := make([]byte, req.Length)
 			resp = &block.Response{
-				Type:    comm.MSG_TYPE_READ_RESPONSE,
-				Result:  "Success",
-				Context: buf,
+				Type:   comm.MSG_TYPE_READ_RESPONSE,
+				Length: req.Length,
+				Result: "Success",
 			}
+			attachData = true
 		} else if req.Type == comm.MSG_TYPE_WRITE_REQUEST {
-			buf := make([]byte, len(req.Context))
-			copy(buf, req.Context)
+			buf := make([]byte, req.Length)
+			if err := comm.ReceiveData(conn, buf); err != nil {
+				log.Error("Fail to receive data:", err)
+			}
 			resp = &block.Response{
 				Type:   comm.MSG_TYPE_WRITE_RESPONSE,
 				Result: "Success",
 			}
-
 		} else {
 			log.Error("Invalid request type: ", req.Type)
 			return
@@ -92,6 +95,11 @@ func serve(conn *net.TCPConn) {
 		if err := comm.SendResponse(conn, resp); err != nil {
 			log.Error("Fail to send response: ", err)
 			return
+		}
+		if attachData {
+			if err := comm.SendData(conn, buf); err != nil {
+				log.Error("Fail to send data:", err)
+			}
 		}
 	}
 }
