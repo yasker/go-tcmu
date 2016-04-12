@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/golang/protobuf/proto"
+	"github.com/gogo/protobuf/proto"
 
 	"github.com/yasker/longhorn/block"
 )

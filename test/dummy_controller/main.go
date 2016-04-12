@@ -159,12 +159,12 @@ func processData(conn *net.TCPConn) {
 	for sent != received {
 		time.Sleep(10 * time.Millisecond)
 	}
-
 	seconds := time.Now().Sub(before).Seconds()
 	bandwidth := float64(sizeInBytes) / seconds / 1024 / 1024
-	iops := sizeInBytes / int64(seconds) / reqSize
-	log.Debugf("Processing done, speed at %.2f MB/second, %v request/seconds",
-		bandwidth, iops)
+	bandwidthBits := bandwidth * 8
+	iops := float64(sizeInBytes) / float64(reqSize) / float64(seconds)
+	log.Debugf("Processing done, speed at %.2f MB/sec(%.2f Mb/sec), %.0f request/seconds",
+		bandwidth, bandwidthBits, iops)
 }
 
 /*
