@@ -87,6 +87,9 @@ func SendRequest(conn io.Writer, req *block.Request) error {
 func ReadResponse(conn io.Reader) (*block.Response, error) {
 	lengthData := make([]byte, MESSAGE_LENGTH_SIZE)
 	_, err := conn.Read(lengthData)
+	if err == io.EOF {
+		return nil, err
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Fail to read message length size:", err)
 	}

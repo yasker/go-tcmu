@@ -22,6 +22,10 @@ var (
 	requestSize = flag.Int("request-size", 4096, "request size of each IO")
 	workers     = flag.Int("workers", 128, "worker numbers")
 
+	done     chan bool
+	sent     int
+	received int
+
 	cpuprofile = "dummy_controller.pf"
 )
 
@@ -61,80 +65,99 @@ func main() {
 	log.Info("Finish processing")
 }
 
-func processData(conn *net.TCPConn) {
-	before := time.Now()
-	reqSize := int64(*requestSize)
-	sizeInBytes := int64(*size * 1024 * 1024)
-
-	for offset := int64(0); offset < sizeInBytes-reqSize; offset += reqSize {
-		var (
-			resp *block.Response
-			err  error
-		)
-		if offset%(1024*1024*100) == 0 {
-			log.Debug("Processing offset ", offset)
+func processRequest(conn *net.TCPConn, requests chan *block.Request) {
+	for req := range requests {
+		if err := comm.SendRequest(conn, req); err != nil {
+			log.Error("Fail to send request:", err)
+			continue
 		}
-
-		if *mode == "write" {
-			buf := make([]byte, reqSize, reqSize)
-			if err := comm.SendRequest(conn, &block.Request{
-				Type:   comm.MSG_TYPE_WRITE_REQUEST,
-				Offset: offset,
-				Length: reqSize,
-			}); err != nil {
-				log.Error("Fail to send request:", err)
+		if *mode == "read" {
+			if req.Type != comm.MSG_TYPE_READ_REQUEST {
+				log.Error("Wrong kinds of request: ", req.Type)
 				continue
 			}
+		} else {
+			if req.Type != comm.MSG_TYPE_WRITE_REQUEST {
+				log.Error("Wrong kinds of request: ", req.Type)
+				continue
+			}
+		}
+		if req.Type == comm.MSG_TYPE_WRITE_REQUEST {
+			buf := make([]byte, req.Length, req.Length)
 			if err := comm.SendData(conn, buf); err != nil {
 				log.Error("Fail to send data:", err)
 				continue
 			}
+		}
+		sent++
+	}
+}
 
-			resp, err = comm.ReadResponse(conn)
-			if err != nil {
-				log.Error("Fail to read response:", err)
-				continue
-			}
-			if resp.Type != comm.MSG_TYPE_WRITE_RESPONSE {
-				log.Error("Write failed: ", resp.Type)
-				continue
-			}
-			if resp.Result != "Success" {
-				log.Error("Write failed: ", resp.Result)
+func processResponse(conn *net.TCPConn) {
+	for {
+		resp, err := comm.ReadResponse(conn)
+		if err != nil {
+			break
+			log.Error("Fail to read response:", err)
+			continue
+		}
+		if resp.Result != "Success" {
+			log.Error("Operation failed: ", resp.Result)
+			continue
+		}
+		if *mode == "read" {
+			if resp.Type != comm.MSG_TYPE_READ_RESPONSE {
+				log.Error("Wrong kinds of response: ", resp.Type)
 				continue
 			}
 		} else {
-			buf := make([]byte, reqSize, reqSize)
-			if err := comm.SendRequest(conn, &block.Request{
-				Type:   comm.MSG_TYPE_READ_REQUEST,
-				Offset: offset,
-				Length: reqSize,
-			}); err != nil {
-				log.Error("Fail to send request:", err)
+			if resp.Type != comm.MSG_TYPE_WRITE_RESPONSE {
+				log.Error("Wrong kinds of response: ", resp.Type)
 				continue
 			}
-			resp, err = comm.ReadResponse(conn)
-			if err != nil {
-				log.Error("Fail to read response:", err)
-				continue
-			}
-			if resp.Type != comm.MSG_TYPE_READ_RESPONSE {
-				log.Error("Wrong read response: ", resp.Type)
-				continue
-			}
-			if resp.Result != "Success" {
-				log.Error("Write failed: ", resp.Result)
-				continue
-			}
-			if resp.Length != reqSize {
-				log.Error("Length not match!")
-				continue
-			}
+		}
+		if resp.Type == comm.MSG_TYPE_READ_RESPONSE {
+			buf := make([]byte, resp.Length, resp.Length)
 			if err := comm.ReceiveData(conn, buf); err != nil {
 				log.Error("Receive data failed:", err)
 				continue
 			}
 		}
+		received++
+	}
+}
+
+func processData(conn *net.TCPConn) {
+	before := time.Now()
+	reqSize := int64(*requestSize)
+	sizeInBytes := int64(*size * 1024 * 1024)
+
+	requests := make(chan *block.Request, 16)
+	go processRequest(conn, requests)
+	go processResponse(conn)
+
+	for offset := int64(0); offset < sizeInBytes-reqSize; offset += reqSize {
+		if offset%(1024*1024*100) == 0 {
+			log.Debug("Processing offset ", offset)
+		}
+
+		if *mode == "write" {
+			requests <- &block.Request{
+				Type:   comm.MSG_TYPE_WRITE_REQUEST,
+				Offset: offset,
+				Length: reqSize,
+			}
+		} else {
+			requests <- &block.Request{
+				Type:   comm.MSG_TYPE_READ_REQUEST,
+				Offset: offset,
+				Length: reqSize,
+			}
+		}
+	}
+	close(requests)
+	for sent != received {
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	seconds := time.Now().Sub(before).Seconds()
