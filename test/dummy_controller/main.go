@@ -5,6 +5,8 @@ import (
 	"net"
 	"os"
 	"runtime/pprof"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -27,7 +29,21 @@ var (
 	received int
 
 	cpuprofile = "dummy_controller.pf"
+
+	idChanMap      map[int64]chan *WholeResponse
+	idCounter      int64 = 0
+	idChanMapMutex *sync.Mutex
 )
+
+type WholeRequest struct {
+	header *block.Request
+	data   []byte
+}
+
+type WholeResponse struct {
+	header *block.Response
+	data   []byte
+}
 
 func main() {
 	logrus.SetLevel(logrus.DebugLevel)
@@ -58,6 +74,9 @@ func main() {
 	}
 	defer conn.Close()
 
+	idChanMap = make(map[int64]chan *WholeResponse)
+	idChanMapMutex = &sync.Mutex{}
+
 	log.Info("Start processing")
 
 	processData(conn)
@@ -65,26 +84,26 @@ func main() {
 	log.Info("Finish processing")
 }
 
-func processRequest(conn *net.TCPConn, requests chan *block.Request) {
+func processRequest(conn *net.TCPConn, requests chan *WholeRequest) {
 	for req := range requests {
-		if err := comm.SendRequest(conn, req); err != nil {
+		header := req.header
+		if err := comm.SendRequest(conn, header); err != nil {
 			log.Error("Fail to send request:", err)
 			continue
 		}
 		if *mode == "read" {
-			if req.Type != comm.MSG_TYPE_READ_REQUEST {
-				log.Error("Wrong kinds of request: ", req.Type)
+			if header.Type != comm.MSG_TYPE_READ_REQUEST {
+				log.Error("Wrong kinds of request: ", header.Type)
 				continue
 			}
 		} else {
-			if req.Type != comm.MSG_TYPE_WRITE_REQUEST {
-				log.Error("Wrong kinds of request: ", req.Type)
+			if header.Type != comm.MSG_TYPE_WRITE_REQUEST {
+				log.Error("Wrong kinds of request: ", header.Type)
 				continue
 			}
 		}
-		if req.Type == comm.MSG_TYPE_WRITE_REQUEST {
-			buf := make([]byte, req.Length, req.Length)
-			if err := comm.SendData(conn, buf); err != nil {
+		if header.Type == comm.MSG_TYPE_WRITE_REQUEST {
+			if err := comm.SendData(conn, req.data); err != nil {
 				log.Error("Fail to send data:", err)
 				continue
 			}
@@ -95,38 +114,52 @@ func processRequest(conn *net.TCPConn, requests chan *block.Request) {
 
 func processResponse(conn *net.TCPConn) {
 	for {
-		resp, err := comm.ReadResponse(conn)
+		var (
+			response *WholeResponse
+			data     []byte
+		)
+		respHeader, err := comm.ReadResponse(conn)
 		if err != nil {
 			break
 			log.Error("Fail to read response:", err)
 			continue
 		}
-		if resp.Result != "Success" {
-			log.Error("Operation failed: ", resp.Result)
+		if respHeader.Result != "Success" {
+			log.Error("Operation failed: ", respHeader.Result)
 			continue
 		}
 		if *mode == "read" {
-			if resp.Type != comm.MSG_TYPE_READ_RESPONSE {
-				log.Error("Wrong kinds of response: ", resp.Type)
+			if respHeader.Type != comm.MSG_TYPE_READ_RESPONSE {
+				log.Error("Wrong kinds of response: ", respHeader.Type)
 				continue
 			}
 		} else {
-			if resp.Type != comm.MSG_TYPE_WRITE_RESPONSE {
-				log.Error("Wrong kinds of response: ", resp.Type)
+			if respHeader.Type != comm.MSG_TYPE_WRITE_RESPONSE {
+				log.Error("Wrong kinds of response: ", respHeader.Type)
 				continue
 			}
 		}
-		if resp.Type == comm.MSG_TYPE_READ_RESPONSE {
-			buf := make([]byte, resp.Length, resp.Length)
-			if err := comm.ReceiveData(conn, buf); err != nil {
+		if respHeader.Type == comm.MSG_TYPE_READ_RESPONSE {
+			data = make([]byte, respHeader.Length, respHeader.Length)
+			if err := comm.ReceiveData(conn, data); err != nil {
 				log.Error("Receive data failed:", err)
 				continue
 			}
 		}
+		idChanMapMutex.Lock()
+		respChan := idChanMap[respHeader.Id]
+		delete(idChanMap, respHeader.Id)
+		idChanMapMutex.Unlock()
+		response = &WholeResponse{
+			header: respHeader,
+			data:   data,
+		}
+		respChan <- response
 		received++
 	}
 }
 
+/*
 func processData(conn *net.TCPConn) {
 	before := time.Now()
 	reqSize := int64(*requestSize)
@@ -166,11 +199,15 @@ func processData(conn *net.TCPConn) {
 	log.Debugf("Processing done, speed at %.2f MB/sec(%.2f Mb/sec), %.0f request/seconds",
 		bandwidth, bandwidthBits, iops)
 }
+*/
 
-/*
-func processData(client block.TransferClient) {
+func processData(conn *net.TCPConn) {
 	before := time.Now()
 	reqSize := int64(*requestSize)
+
+	requests := make(chan *WholeRequest, *workers)
+	go processRequest(conn, requests)
+	go processResponse(conn)
 
 	co := make(chan int64, *workers)
 	wg := sync.WaitGroup{}
@@ -178,7 +215,7 @@ func processData(client block.TransferClient) {
 	for i := 0; i < *workers; i++ {
 		go func() {
 			defer wg.Done()
-			process(client, *mode, reqSize, co)
+			process(conn, requests, *mode, reqSize, co)
 		}()
 	}
 
@@ -191,36 +228,77 @@ func processData(client block.TransferClient) {
 
 	seconds := time.Now().Sub(before).Seconds()
 	bandwidth := float64(sizeInBytes) / seconds / 1024 / 1024
-	iops := sizeInBytes / int64(seconds) / reqSize
-	log.Debugf("Processing done, speed at %.2f MB/second, %v request/seconds",
-		bandwidth, iops)
+	bandwidthBits := bandwidth * 8
+	iops := float64(sizeInBytes) / float64(reqSize) / float64(seconds)
+	log.Debugf("Processing done, speed at %.2f MB/sec(%.2f Mb/sec), %.0f request/seconds",
+		bandwidth, bandwidthBits, iops)
 }
 
-func process(client block.TransferClient, mode string, reqSize int64, co chan int64) {
+func process(conn *net.TCPConn, requests chan *WholeRequest, mode string, reqSize int64, co chan int64) {
 	for offset := range co {
-		var err error
+		var (
+			err  error
+			resp *WholeResponse
+		)
+
 		if offset%(1024*1024*100) == 0 {
 			log.Debug("Processing offset ", offset)
 		}
 
 		if mode == "write" {
 			buf := make([]byte, reqSize, reqSize)
-			_, err = client.Write(context.Background(), &block.WriteRequest{
-				Offset:  offset,
-				Context: buf,
-			})
+			_, err = RequestWrite(conn, requests, &WholeRequest{
+				header: &block.Request{
+					Type:   comm.MSG_TYPE_WRITE_REQUEST,
+					Offset: offset,
+					Length: reqSize,
+				},
+				data: buf})
 		} else {
-			var resp *block.ReadResponse
-			buf := make([]byte, reqSize, reqSize)
-			resp, err = client.Read(context.Background(), &block.ReadRequest{
-				Offset: offset,
-				Length: reqSize,
-			})
-			copy(buf, resp.Context)
+			resp, err = RequestRead(conn, requests, &WholeRequest{
+				header: &block.Request{
+					Type:   comm.MSG_TYPE_READ_REQUEST,
+					Offset: offset,
+					Length: reqSize,
+				}})
+			if len(resp.data) != int(reqSize) {
+				log.Errorln("Wrong data from read")
+			}
 		}
 		if err != nil {
 			log.Errorln("Fail to process data from offset ", offset)
 		}
 	}
 }
-*/
+
+func GetNewId() int64 {
+	return atomic.AddInt64(&idCounter, 1)
+}
+
+func RequestWrite(conn *net.TCPConn, requests chan *WholeRequest, request *WholeRequest) (*WholeResponse, error) {
+	var response *WholeResponse
+	connRequest := request.header
+	connRequest.Id = GetNewId()
+	respChan := make(chan *WholeResponse)
+	idChanMapMutex.Lock()
+	idChanMap[connRequest.Id] = respChan
+	idChanMapMutex.Unlock()
+	requests <- request
+
+	response = <-respChan
+	return response, nil
+}
+
+func RequestRead(conn *net.TCPConn, requests chan *WholeRequest, request *WholeRequest) (*WholeResponse, error) {
+	var response *WholeResponse
+	connRequest := request.header
+	connRequest.Id = GetNewId()
+	respChan := make(chan *WholeResponse)
+	idChanMapMutex.Lock()
+	idChanMap[connRequest.Id] = respChan
+	idChanMapMutex.Unlock()
+	requests <- request
+
+	response = <-respChan
+	return response, nil
+}

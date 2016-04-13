@@ -88,6 +88,7 @@ func serve(conn *net.TCPConn) {
 
 		if req.Type == comm.MSG_TYPE_READ_REQUEST {
 			responses <- &block.Response{
+				Id:     req.Id,
 				Type:   comm.MSG_TYPE_READ_RESPONSE,
 				Length: req.Length,
 				Result: "Success",
@@ -98,6 +99,7 @@ func serve(conn *net.TCPConn) {
 				log.Error("Fail to receive data:", err)
 			}
 			responses <- &block.Response{
+				Id:     req.Id,
 				Type:   comm.MSG_TYPE_WRITE_RESPONSE,
 				Result: "Success",
 			}
