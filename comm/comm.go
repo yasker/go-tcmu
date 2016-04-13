@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
+	"strings"
 
 	"github.com/gogo/protobuf/proto"
 
@@ -32,8 +34,8 @@ func DecodeLength(bytes []byte) uint32 {
 func ReadRequest(conn io.Reader) (*block.Request, error) {
 	lengthData := make([]byte, MESSAGE_LENGTH_SIZE)
 	_, err := conn.Read(lengthData)
-	if err == io.EOF {
-		return nil, err
+	if IsEOF(err) {
+		return nil, io.EOF
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Fail to read message length size:", err)
@@ -87,8 +89,8 @@ func SendRequest(conn io.Writer, req *block.Request) error {
 func ReadResponse(conn io.Reader) (*block.Response, error) {
 	lengthData := make([]byte, MESSAGE_LENGTH_SIZE)
 	_, err := conn.Read(lengthData)
-	if err == io.EOF {
-		return nil, err
+	if IsEOF(err) {
+		return nil, io.EOF
 	}
 	if err != nil {
 		return nil, fmt.Errorf("Fail to read message length size:", err)
@@ -115,4 +117,17 @@ func SendData(conn io.Writer, buf []byte) error {
 func ReceiveData(conn io.Reader, buf []byte) error {
 	_, err := conn.Read(buf)
 	return err
+}
+
+func IsEOF(err error) bool {
+	if err == nil {
+		return false
+	} else if err == io.EOF {
+		return true
+	} else if oerr, ok := err.(*net.OpError); ok {
+		if strings.HasSuffix(oerr.Err.Error(), "use of closed network connection") {
+			return true
+		}
+	}
+	return false
 }

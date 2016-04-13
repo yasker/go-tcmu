@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"runtime/pprof"
@@ -123,6 +124,9 @@ func processResponse(conn *net.TCPConn) {
 		)
 		respHeader, err := comm.ReadResponse(conn)
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			log.Error("Fail to read response:", err)
 			continue
 		}
