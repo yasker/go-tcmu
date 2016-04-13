@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net"
 	"os"
 	"runtime/pprof"
@@ -33,6 +34,8 @@ var (
 	idChanMap      map[int64]chan *WholeResponse
 	idCounter      int64 = 0
 	idChanMapMutex *sync.Mutex
+
+	timeout = 5 // in seconds
 )
 
 type WholeRequest struct {
@@ -120,7 +123,6 @@ func processResponse(conn *net.TCPConn) {
 		)
 		respHeader, err := comm.ReadResponse(conn)
 		if err != nil {
-			break
 			log.Error("Fail to read response:", err)
 			continue
 		}
@@ -159,48 +161,6 @@ func processResponse(conn *net.TCPConn) {
 	}
 }
 
-/*
-func processData(conn *net.TCPConn) {
-	before := time.Now()
-	reqSize := int64(*requestSize)
-	sizeInBytes := int64(*size * 1024 * 1024)
-
-	requests := make(chan *block.Request, 16)
-	go processRequest(conn, requests)
-	go processResponse(conn)
-
-	for offset := int64(0); offset < sizeInBytes-reqSize; offset += reqSize {
-		if offset%(1024*1024*100) == 0 {
-			log.Debug("Processing offset ", offset)
-		}
-
-		if *mode == "write" {
-			requests <- &block.Request{
-				Type:   comm.MSG_TYPE_WRITE_REQUEST,
-				Offset: offset,
-				Length: reqSize,
-			}
-		} else {
-			requests <- &block.Request{
-				Type:   comm.MSG_TYPE_READ_REQUEST,
-				Offset: offset,
-				Length: reqSize,
-			}
-		}
-	}
-	close(requests)
-	for sent != received {
-		time.Sleep(10 * time.Millisecond)
-	}
-	seconds := time.Now().Sub(before).Seconds()
-	bandwidth := float64(sizeInBytes) / seconds / 1024 / 1024
-	bandwidthBits := bandwidth * 8
-	iops := float64(sizeInBytes) / float64(reqSize) / float64(seconds)
-	log.Debugf("Processing done, speed at %.2f MB/sec(%.2f Mb/sec), %.0f request/seconds",
-		bandwidth, bandwidthBits, iops)
-}
-*/
-
 func processData(conn *net.TCPConn) {
 	before := time.Now()
 	reqSize := int64(*requestSize)
@@ -215,7 +175,7 @@ func processData(conn *net.TCPConn) {
 	for i := 0; i < *workers; i++ {
 		go func() {
 			defer wg.Done()
-			process(conn, requests, *mode, reqSize, co)
+			process(requests, *mode, reqSize, co)
 		}()
 	}
 
@@ -234,7 +194,7 @@ func processData(conn *net.TCPConn) {
 		bandwidth, bandwidthBits, iops)
 }
 
-func process(conn *net.TCPConn, requests chan *WholeRequest, mode string, reqSize int64, co chan int64) {
+func process(requests chan *WholeRequest, mode string, reqSize int64, co chan int64) {
 	for offset := range co {
 		var (
 			err  error
@@ -247,26 +207,30 @@ func process(conn *net.TCPConn, requests chan *WholeRequest, mode string, reqSiz
 
 		if mode == "write" {
 			buf := make([]byte, reqSize, reqSize)
-			_, err = RequestWrite(conn, requests, &WholeRequest{
+			_, err = Request(requests, &WholeRequest{
 				header: &block.Request{
 					Type:   comm.MSG_TYPE_WRITE_REQUEST,
 					Offset: offset,
 					Length: reqSize,
 				},
 				data: buf})
+			if err != nil {
+				log.Errorln("Fail to process data from offset ", offset)
+			}
 		} else {
-			resp, err = RequestRead(conn, requests, &WholeRequest{
+			resp, err = Request(requests, &WholeRequest{
 				header: &block.Request{
 					Type:   comm.MSG_TYPE_READ_REQUEST,
 					Offset: offset,
 					Length: reqSize,
 				}})
+			if err != nil {
+				log.Errorln("Fail to process data from offset ", offset)
+				continue
+			}
 			if len(resp.data) != int(reqSize) {
 				log.Errorln("Wrong data from read")
 			}
-		}
-		if err != nil {
-			log.Errorln("Fail to process data from offset ", offset)
 		}
 	}
 }
@@ -275,8 +239,11 @@ func GetNewId() int64 {
 	return atomic.AddInt64(&idCounter, 1)
 }
 
-func RequestWrite(conn *net.TCPConn, requests chan *WholeRequest, request *WholeRequest) (*WholeResponse, error) {
-	var response *WholeResponse
+func Request(requests chan *WholeRequest, request *WholeRequest) (*WholeResponse, error) {
+	var (
+		response *WholeResponse
+		err      error
+	)
 	connRequest := request.header
 	connRequest.Id = GetNewId()
 	respChan := make(chan *WholeResponse)
@@ -285,20 +252,11 @@ func RequestWrite(conn *net.TCPConn, requests chan *WholeRequest, request *Whole
 	idChanMapMutex.Unlock()
 	requests <- request
 
-	response = <-respChan
-	return response, nil
-}
-
-func RequestRead(conn *net.TCPConn, requests chan *WholeRequest, request *WholeRequest) (*WholeResponse, error) {
-	var response *WholeResponse
-	connRequest := request.header
-	connRequest.Id = GetNewId()
-	respChan := make(chan *WholeResponse)
-	idChanMapMutex.Lock()
-	idChanMap[connRequest.Id] = respChan
-	idChanMapMutex.Unlock()
-	requests <- request
-
-	response = <-respChan
-	return response, nil
+	select {
+	case response = <-respChan:
+		err = nil
+	case <-time.After(time.Duration(timeout) * time.Second):
+		err = fmt.Errorf("Timeout for operation %v", connRequest.Id)
+	}
+	return response, err
 }
