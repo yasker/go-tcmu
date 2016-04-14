@@ -42,6 +42,7 @@ var (
 	address = "localhost:5000"
 
 	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+	workers    = 128
 
 	sigs chan os.Signal
 	done chan bool
@@ -54,6 +55,7 @@ type TcmuState struct {
 	lbas      int64
 	blockSize int
 	mutex     *sync.Mutex
+	dev       TcmuDevice
 }
 
 //export shOpen
@@ -98,9 +100,10 @@ func shOpen(dev TcmuDevice) int {
 		log.Fatalf("Cannot connect to replica, %v", err)
 	}
 
-	state.client = comm.NewClient(state.conn, 5, 128)
+	state.client = comm.NewClient(state.conn, 5, workers)
+	state.dev = dev
 
-	go state.HandleRequest(dev)
+	go state.HandleRequest()
 
 	log.Debugln("Device added")
 
@@ -108,16 +111,27 @@ func shOpen(dev TcmuDevice) int {
 	return 0
 }
 
-func (s *TcmuState) HandleRequest(dev TcmuDevice) {
+func (s *TcmuState) HandleRequest() {
 	defer s.conn.Close()
+
+	cmds := make(chan TcmuCommand, workers)
+	wg := sync.WaitGroup{}
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			s.processCommands(cmds)
+		}()
+	}
+
 	for true {
-		C.tcmulib_processing_start(dev)
-		cmd := C.tcmulib_get_next_command(dev)
+		C.tcmulib_processing_start(s.dev)
+		cmd := C.tcmulib_get_next_command(s.dev)
 		for cmd != nil {
-			go s.processCommand(dev, cmd)
-			cmd = C.tcmulib_get_next_command(dev)
+			cmds <- cmd
+			cmd = C.tcmulib_get_next_command(s.dev)
 		}
-		ret := C.tcmu_wait_for_next_command(dev)
+		ret := C.tcmu_wait_for_next_command(s.dev)
 		if ret != 0 {
 			log.Errorln("Fail to wait for next command", ret)
 			break
@@ -177,21 +191,27 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	return C.SAM_STAT_GOOD
 }
 
-func (s *TcmuState) processCommand(dev TcmuDevice, cmd TcmuCommand) {
-	ret := s.handleCommand(dev, cmd)
+func (s *TcmuState) processCommands(cmds chan TcmuCommand) {
+	for cmd := range cmds {
+		s.processCommand(cmd)
+	}
+}
+
+func (s *TcmuState) processCommand(cmd TcmuCommand) {
+	ret := s.handleCommand(cmd)
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	C.tcmulib_command_complete(dev, cmd, C.int(ret))
-	C.tcmulib_processing_complete(dev)
+	C.tcmulib_command_complete(s.dev, cmd, C.int(ret))
+	C.tcmulib_processing_complete(s.dev)
 }
 
-func (s *TcmuState) handleCommand(dev TcmuDevice, cmd TcmuCommand) int {
+func (s *TcmuState) handleCommand(cmd TcmuCommand) int {
 	scsiCmd := CmdGetScsiCmd(cmd)
 	switch scsiCmd {
 	case C.INQUIRY:
-		return CmdEmulateInquiry(cmd, dev)
+		return CmdEmulateInquiry(cmd, s.dev)
 	case C.TEST_UNIT_READY:
 		return CmdEmulateTestUnitReady(cmd)
 	case C.SERVICE_ACTION_IN_16:
@@ -201,9 +221,9 @@ func (s *TcmuState) handleCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	case C.MODE_SELECT, C.MODE_SELECT_10:
 		return CmdEmulateModeSelect(cmd)
 	case C.READ_6, C.READ_10, C.READ_12, C.READ_16:
-		return s.handleReadCommand(dev, cmd)
+		return s.handleReadCommand(s.dev, cmd)
 	case C.WRITE_6, C.WRITE_10, C.WRITE_12, C.WRITE_16:
-		return s.handleWriteCommand(dev, cmd)
+		return s.handleWriteCommand(s.dev, cmd)
 	default:
 		log.Errorf("unknown command 0x%x\n", scsiCmd)
 	}
