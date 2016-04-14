@@ -2,13 +2,10 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"io"
 	"net"
 	"os"
 	"runtime/pprof"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -32,22 +29,8 @@ var (
 
 	cpuprofile = "dummy_controller.pf"
 
-	idChanMap      map[int64]chan *WholeResponse
-	idCounter      int64 = 0
-	idChanMapMutex *sync.Mutex
-
 	timeout = 5 // in seconds
 )
-
-type WholeRequest struct {
-	header *block.Request
-	data   []byte
-}
-
-type WholeResponse struct {
-	header *block.Response
-	data   []byte
-}
 
 func main() {
 	logrus.SetLevel(logrus.DebugLevel)
@@ -78,9 +61,6 @@ func main() {
 	}
 	defer conn.Close()
 
-	idChanMap = make(map[int64]chan *WholeResponse)
-	idChanMapMutex = &sync.Mutex{}
-
 	log.Info("Start processing")
 
 	processData(conn)
@@ -88,90 +68,11 @@ func main() {
 	log.Info("Finish processing")
 }
 
-func processRequest(conn *net.TCPConn, requests chan *WholeRequest) {
-	for req := range requests {
-		header := req.header
-		if err := comm.SendRequest(conn, header); err != nil {
-			log.Error("Fail to send request:", err)
-			continue
-		}
-		if *mode == "read" {
-			if header.Type != comm.MSG_TYPE_READ_REQUEST {
-				log.Error("Wrong kinds of request: ", header.Type)
-				continue
-			}
-		} else {
-			if header.Type != comm.MSG_TYPE_WRITE_REQUEST {
-				log.Error("Wrong kinds of request: ", header.Type)
-				continue
-			}
-		}
-		if header.Type == comm.MSG_TYPE_WRITE_REQUEST {
-			if err := comm.SendData(conn, req.data); err != nil {
-				log.Error("Fail to send data:", err)
-				continue
-			}
-		}
-		sent++
-	}
-}
-
-func processResponse(conn *net.TCPConn) {
-	for {
-		var (
-			response *WholeResponse
-			data     []byte
-		)
-		respHeader, err := comm.ReadResponse(conn)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			log.Error("Fail to read response:", err)
-			continue
-		}
-		if respHeader.Result != "Success" {
-			log.Error("Operation failed: ", respHeader.Result)
-			continue
-		}
-		if *mode == "read" {
-			if respHeader.Type != comm.MSG_TYPE_READ_RESPONSE {
-				log.Error("Wrong kinds of response: ", respHeader.Type)
-				continue
-			}
-		} else {
-			if respHeader.Type != comm.MSG_TYPE_WRITE_RESPONSE {
-				log.Error("Wrong kinds of response: ", respHeader.Type)
-				continue
-			}
-		}
-		if respHeader.Type == comm.MSG_TYPE_READ_RESPONSE {
-			data = make([]byte, respHeader.Length, respHeader.Length)
-			if err := comm.ReceiveData(conn, data); err != nil {
-				log.Error("Receive data failed:", err)
-				continue
-			}
-		}
-		idChanMapMutex.Lock()
-		respChan := idChanMap[respHeader.Id]
-		delete(idChanMap, respHeader.Id)
-		idChanMapMutex.Unlock()
-		response = &WholeResponse{
-			header: respHeader,
-			data:   data,
-		}
-		respChan <- response
-		received++
-	}
-}
-
 func processData(conn *net.TCPConn) {
 	before := time.Now()
 	reqSize := int64(*requestSize)
 
-	requests := make(chan *WholeRequest, *workers)
-	go processRequest(conn, requests)
-	go processResponse(conn)
+	client := comm.NewClient(conn, 5, *workers)
 
 	co := make(chan int64, *workers)
 	wg := sync.WaitGroup{}
@@ -179,7 +80,7 @@ func processData(conn *net.TCPConn) {
 	for i := 0; i < *workers; i++ {
 		go func() {
 			defer wg.Done()
-			process(requests, *mode, reqSize, co)
+			process(client, *mode, reqSize, co)
 		}()
 	}
 
@@ -198,11 +99,11 @@ func processData(conn *net.TCPConn) {
 		bandwidth, bandwidthBits, iops)
 }
 
-func process(requests chan *WholeRequest, mode string, reqSize int64, co chan int64) {
+func process(client *comm.Client, mode string, reqSize int64, co chan int64) {
 	for offset := range co {
 		var (
-			err  error
-			resp *WholeResponse
+			err error
+			//resp *comm.Response
 		)
 
 		if offset%(1024*1024*100) == 0 {
@@ -211,56 +112,27 @@ func process(requests chan *WholeRequest, mode string, reqSize int64, co chan in
 
 		if mode == "write" {
 			buf := make([]byte, reqSize, reqSize)
-			_, err = Request(requests, &WholeRequest{
-				header: &block.Request{
+			_, err = client.Call(&comm.Request{
+				Header: &block.Request{
 					Type:   comm.MSG_TYPE_WRITE_REQUEST,
 					Offset: offset,
 					Length: reqSize,
 				},
-				data: buf})
+				Data: buf})
 			if err != nil {
-				log.Errorln("Fail to process data from offset ", offset)
+				log.Errorln("Fail to process data from offset ", offset, err)
 			}
 		} else {
-			resp, err = Request(requests, &WholeRequest{
-				header: &block.Request{
+			_, err = client.Call(&comm.Request{
+				Header: &block.Request{
 					Type:   comm.MSG_TYPE_READ_REQUEST,
 					Offset: offset,
 					Length: reqSize,
 				}})
 			if err != nil {
-				log.Errorln("Fail to process data from offset ", offset)
+				log.Errorln("Fail to process data from offset ", offset, err)
 				continue
-			}
-			if len(resp.data) != int(reqSize) {
-				log.Errorln("Wrong data from read")
 			}
 		}
 	}
-}
-
-func GetNewId() int64 {
-	return atomic.AddInt64(&idCounter, 1)
-}
-
-func Request(requests chan *WholeRequest, request *WholeRequest) (*WholeResponse, error) {
-	var (
-		response *WholeResponse
-		err      error
-	)
-	connRequest := request.header
-	connRequest.Id = GetNewId()
-	respChan := make(chan *WholeResponse)
-	idChanMapMutex.Lock()
-	idChanMap[connRequest.Id] = respChan
-	idChanMapMutex.Unlock()
-	requests <- request
-
-	select {
-	case response = <-respChan:
-		err = nil
-	case <-time.After(time.Duration(timeout) * time.Second):
-		err = fmt.Errorf("Timeout for operation %v", connRequest.Id)
-	}
-	return response, err
 }
