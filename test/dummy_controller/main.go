@@ -11,7 +11,7 @@ import (
 	"github.com/Sirupsen/logrus"
 
 	"github.com/yasker/longhorn/block"
-	"github.com/yasker/longhorn/comm"
+	"github.com/yasker/longhorn/rpc"
 )
 
 var (
@@ -72,7 +72,7 @@ func processData(conn *net.TCPConn) {
 	before := time.Now()
 	reqSize := int64(*requestSize)
 
-	client := comm.NewClient(conn, 5, *workers)
+	client := rpc.NewClient(conn, 5, *workers)
 
 	co := make(chan int64, *workers)
 	wg := sync.WaitGroup{}
@@ -99,11 +99,11 @@ func processData(conn *net.TCPConn) {
 		bandwidth, bandwidthBits, iops)
 }
 
-func process(client *comm.Client, mode string, reqSize int64, co chan int64) {
+func process(client *rpc.Client, mode string, reqSize int64, co chan int64) {
 	for offset := range co {
 		var (
 			err error
-			//resp *comm.Response
+			//resp *rpc.Response
 		)
 
 		if offset%(1024*1024*100) == 0 {
@@ -112,9 +112,9 @@ func process(client *comm.Client, mode string, reqSize int64, co chan int64) {
 
 		if mode == "write" {
 			buf := make([]byte, reqSize)
-			_, err = client.Call(&comm.Request{
+			_, err = client.Call(&rpc.Request{
 				Header: &block.Request{
-					Type:   comm.MSG_TYPE_WRITE_REQUEST,
+					Type:   rpc.MSG_TYPE_WRITE_REQUEST,
 					Offset: offset,
 					Length: reqSize,
 				},
@@ -123,9 +123,9 @@ func process(client *comm.Client, mode string, reqSize int64, co chan int64) {
 				log.Errorln("Fail to process data from offset ", offset, err)
 			}
 		} else {
-			_, err = client.Call(&comm.Request{
+			_, err = client.Call(&rpc.Request{
 				Header: &block.Request{
-					Type:   comm.MSG_TYPE_READ_REQUEST,
+					Type:   rpc.MSG_TYPE_READ_REQUEST,
 					Offset: offset,
 					Length: reqSize,
 				}})

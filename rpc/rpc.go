@@ -1,4 +1,4 @@
-package comm
+package rpc
 
 import (
 	"encoding/binary"

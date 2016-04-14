@@ -27,7 +27,7 @@ import (
 	"github.com/Sirupsen/logrus"
 
 	"github.com/yasker/longhorn/block"
-	"github.com/yasker/longhorn/comm"
+	"github.com/yasker/longhorn/rpc"
 
 	"flag"
 	"os"
@@ -50,7 +50,7 @@ var (
 
 type TcmuState struct {
 	volume    string
-	client    *comm.Client
+	client    *rpc.Client
 	conn      *net.TCPConn
 	lbas      int64
 	blockSize int
@@ -100,7 +100,7 @@ func shOpen(dev TcmuDevice) int {
 		log.Fatalf("Cannot connect to replica, %v", err)
 	}
 
-	state.client = comm.NewClient(state.conn, 5, workers)
+	state.client = rpc.NewClient(state.conn, 5, workers)
 	state.dev = dev
 
 	go state.HandleRequest()
@@ -143,9 +143,9 @@ func (s *TcmuState) handleReadCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	resp, err := s.client.Call(&comm.Request{
+	resp, err := s.client.Call(&rpc.Request{
 		Header: &block.Request{
-			Type:   comm.MSG_TYPE_READ_REQUEST,
+			Type:   rpc.MSG_TYPE_READ_REQUEST,
 			Offset: offset,
 			Length: int64(length),
 		}})
@@ -177,9 +177,9 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 		return CmdSetMediumError(cmd)
 	}
 
-	if _, err := s.client.Call(&comm.Request{
+	if _, err := s.client.Call(&rpc.Request{
 		Header: &block.Request{
-			Type:   comm.MSG_TYPE_WRITE_REQUEST,
+			Type:   rpc.MSG_TYPE_WRITE_REQUEST,
 			Offset: offset,
 			Length: int64(length),
 		},

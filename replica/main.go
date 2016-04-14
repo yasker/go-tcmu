@@ -9,7 +9,7 @@ import (
 	"github.com/Sirupsen/logrus"
 
 	"github.com/yasker/longhorn/block"
-	"github.com/yasker/longhorn/comm"
+	"github.com/yasker/longhorn/rpc"
 	"github.com/yasker/longhorn/util"
 )
 
@@ -24,35 +24,35 @@ var (
 	file *os.File
 )
 
-func RequestHandler(req *comm.Request) (*comm.Response, error) {
+func RequestHandler(req *rpc.Request) (*rpc.Response, error) {
 	if file == nil {
 		return nil, fmt.Errorf("File is not ready")
 	}
-	if req.Header.Type == comm.MSG_TYPE_READ_REQUEST {
+	if req.Header.Type == rpc.MSG_TYPE_READ_REQUEST {
 		buf := make([]byte, req.Header.Length)
 		if _, err := file.ReadAt(buf, req.Header.Offset); err != nil && err != io.EOF {
 			log.Errorln("read failed: ", err.Error())
 			return nil, err
 		}
-		return &comm.Response{
+		return &rpc.Response{
 			Header: &block.Response{
 				Id:     req.Header.Id,
-				Type:   comm.MSG_TYPE_READ_RESPONSE,
+				Type:   rpc.MSG_TYPE_READ_RESPONSE,
 				Length: req.Header.Length,
 				Result: "Success",
 			},
 			Data: buf,
 		}, nil
 	}
-	if req.Header.Type == comm.MSG_TYPE_WRITE_REQUEST {
+	if req.Header.Type == rpc.MSG_TYPE_WRITE_REQUEST {
 		if _, err := file.WriteAt(req.Data, req.Header.Offset); err != nil {
 			log.Errorln("write failed: ", err.Error())
 			return nil, err
 		}
-		return &comm.Response{
+		return &rpc.Response{
 			Header: &block.Response{
 				Id:     req.Header.Id,
-				Type:   comm.MSG_TYPE_WRITE_RESPONSE,
+				Type:   rpc.MSG_TYPE_WRITE_RESPONSE,
 				Result: "Success",
 			},
 		}, nil
@@ -86,7 +86,7 @@ func main() {
 			log.Errorf("failed to accept connection %v", err)
 			continue
 		}
-		server := comm.NewServer(conn, 128, RequestHandler)
+		server := rpc.NewServer(conn, 128, RequestHandler)
 		server.Start()
 	}
 }
