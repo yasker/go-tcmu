@@ -7,10 +7,9 @@ import (
 	"os"
 
 	"github.com/Sirupsen/logrus"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc"
 
 	"github.com/yasker/longhorn/block"
+	"github.com/yasker/longhorn/comm"
 	"github.com/yasker/longhorn/util"
 )
 
@@ -21,60 +20,73 @@ const (
 )
 
 var (
-	log = logrus.WithFields(logrus.Fields{"pkg": "replica"})
+	log  = logrus.WithFields(logrus.Fields{"pkg": "replica"})
+	file *os.File
 )
 
-type server struct {
-	file *os.File
-}
-
-func (s *server) Read(cxt context.Context, req *block.ReadRequest) (*block.ReadResponse, error) {
-	if s.file == nil {
+func RequestHandler(req *comm.Request) (*comm.Response, error) {
+	if file == nil {
 		return nil, fmt.Errorf("File is not ready")
 	}
-	buf := make([]byte, req.Length)
-	if _, err := s.file.ReadAt(buf, req.Offset); err != nil && err != io.EOF {
-		log.Errorln("read failed: ", err.Error())
-		return nil, err
+	if req.Header.Type == comm.MSG_TYPE_READ_REQUEST {
+		buf := make([]byte, req.Header.Length)
+		if _, err := file.ReadAt(buf, req.Header.Offset); err != nil && err != io.EOF {
+			log.Errorln("read failed: ", err.Error())
+			return nil, err
+		}
+		return &comm.Response{
+			Header: &block.Response{
+				Id:     req.Header.Id,
+				Type:   comm.MSG_TYPE_READ_RESPONSE,
+				Length: req.Header.Length,
+				Result: "Success",
+			},
+			Data: buf,
+		}, nil
 	}
-	resp := &block.ReadResponse{
-		Result:  "Success",
-		Context: buf,
+	if req.Header.Type == comm.MSG_TYPE_WRITE_REQUEST {
+		if _, err := file.WriteAt(req.Data, req.Header.Offset); err != nil {
+			log.Errorln("write failed: ", err.Error())
+			return nil, err
+		}
+		return &comm.Response{
+			Header: &block.Response{
+				Id:     req.Header.Id,
+				Type:   comm.MSG_TYPE_WRITE_RESPONSE,
+				Result: "Success",
+			},
+		}, nil
 	}
-	return resp, nil
-}
-
-func (s *server) Write(cxt context.Context, req *block.WriteRequest) (*block.WriteResponse, error) {
-	if s.file == nil {
-		return nil, fmt.Errorf("File is not ready")
-	}
-	if _, err := s.file.WriteAt(req.Context, req.Offset); err != nil {
-		log.Errorln("write failed: ", err.Error())
-		return nil, err
-	}
-	resp := &block.WriteResponse{
-		Result: "Success",
-	}
-
-	return resp, nil
+	return nil, fmt.Errorf("Invalid request type: ", req.Header.Type)
 }
 
 func main() {
-	l, err := net.Listen("tcp", port)
+	logrus.SetLevel(logrus.DebugLevel)
+
+	addr, err := net.ResolveTCPAddr("tcp4", port)
+	if err != nil {
+		log.Fatalf("failed to resolve ", port, err)
+	}
+	l, err := net.ListenTCP("tcp", addr)
 	if err != nil {
 		log.Fatalf("failed to listen to: %v", err)
 	}
-	s := grpc.NewServer()
 
-	server := &server{}
 	if err := util.FindOrCreateDisk(filename, size); err != nil {
 		log.Fatalf("Fail to find or create disk", err.Error())
 	}
-	server.file, err = os.OpenFile(filename, os.O_RDWR, 0644)
+	file, err = os.OpenFile(filename, os.O_RDWR, 0644)
 	if err != nil {
 		log.Fatalf("Fail to open disk file", err.Error())
 	}
 
-	block.RegisterTransferServer(s, server)
-	s.Serve(l)
+	for {
+		conn, err := l.AcceptTCP()
+		if err != nil {
+			log.Errorf("failed to accept connection %v", err)
+			continue
+		}
+		server := comm.NewServer(conn, 128, RequestHandler)
+		server.Start()
+	}
 }

@@ -19,15 +19,15 @@ import "C"
 import "unsafe"
 
 import (
+	"net"
 	"os/signal"
 	"sync"
 	"syscall"
 
 	"github.com/Sirupsen/logrus"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc"
 
 	"github.com/yasker/longhorn/block"
+	"github.com/yasker/longhorn/comm"
 
 	"flag"
 	"os"
@@ -49,8 +49,8 @@ var (
 
 type TcmuState struct {
 	volume    string
-	client    block.TransferClient
-	conn      *grpc.ClientConn
+	client    *comm.Client
+	conn      *net.TCPConn
 	lbas      int64
 	blockSize int
 	mutex     *sync.Mutex
@@ -89,12 +89,16 @@ func shOpen(dev TcmuDevice) int {
 	//id := strings.TrimPrefix(cfgString, "file/")
 	//TODO check volume name here
 
-	state.conn, err = grpc.Dial(address, grpc.WithInsecure())
+	addr, err := net.ResolveTCPAddr("tcp4", address)
+	if err != nil {
+		log.Fatalf("failed to resolve ", address, err)
+	}
+	state.conn, err = net.DialTCP("tcp", nil, addr)
 	if err != nil {
 		log.Fatalf("Cannot connect to replica, %v", err)
 	}
 
-	state.client = block.NewTransferClient(state.conn)
+	state.client = comm.NewClient(state.conn, 5, 128)
 
 	go state.HandleRequest(dev)
 
@@ -125,16 +129,18 @@ func (s *TcmuState) handleReadCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	resp, err := s.client.Read(context.Background(), &block.ReadRequest{
-		Offset: offset,
-		Length: int64(length),
-	})
+	resp, err := s.client.Call(&comm.Request{
+		Header: &block.Request{
+			Type:   comm.MSG_TYPE_READ_REQUEST,
+			Offset: offset,
+			Length: int64(length),
+		}})
 	if err != nil {
 		log.Errorln("read failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
 
-	copied := CmdMemcpyIntoIovec(cmd, resp.Context, length)
+	copied := CmdMemcpyIntoIovec(cmd, resp.Data, length)
 	if copied != length {
 		log.Errorln("read failed: unable to complete buffer copy ")
 		return CmdSetMediumError(cmd)
@@ -146,7 +152,7 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 	offset := CmdGetLba(cmd) * int64(s.blockSize)
 	length := CmdGetXferLength(cmd) * s.blockSize
 
-	buf := make([]byte, length, length)
+	buf := make([]byte, length)
 	if buf == nil {
 		log.Errorln("read failed: fail to allocate buffer")
 		return CmdSetMediumError(cmd)
@@ -157,10 +163,13 @@ func (s *TcmuState) handleWriteCommand(dev TcmuDevice, cmd TcmuCommand) int {
 		return CmdSetMediumError(cmd)
 	}
 
-	if _, err := s.client.Write(context.Background(), &block.WriteRequest{
-		Offset:  offset,
-		Context: buf,
-	}); err != nil {
+	if _, err := s.client.Call(&comm.Request{
+		Header: &block.Request{
+			Type:   comm.MSG_TYPE_WRITE_REQUEST,
+			Offset: offset,
+			Length: int64(length),
+		},
+		Data: buf}); err != nil {
 		log.Errorln("write failed: ", err.Error())
 		return CmdSetMediumError(cmd)
 	}
