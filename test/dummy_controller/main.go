@@ -111,7 +111,7 @@ func process(client *comm.Client, mode string, reqSize int64, co chan int64) {
 		}
 
 		if mode == "write" {
-			buf := make([]byte, reqSize, reqSize)
+			buf := make([]byte, reqSize)
 			_, err = client.Call(&comm.Request{
 				Header: &block.Request{
 					Type:   comm.MSG_TYPE_WRITE_REQUEST,

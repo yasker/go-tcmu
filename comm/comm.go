@@ -36,6 +36,18 @@ func SendRequest(conn io.Writer, req *block.Request) error {
 	if err != nil {
 		return fmt.Errorf("Fail to encode message: ", err)
 	}
+	return send(conn, data)
+}
+
+func SendResponse(conn io.Writer, resp *block.Response) error {
+	data, err := proto.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("Fail to encode message: ", err)
+	}
+	return send(conn, data)
+}
+
+func send(conn io.Writer, data []byte) error {
 	length := len(data)
 	if length >= (1 << (MSG_HEADER_LENGTH * 8)) {
 		return fmt.Errorf("Length exceed maximum header length: ", length)
@@ -51,23 +63,9 @@ func SendRequest(conn io.Writer, req *block.Request) error {
 }
 
 func ReadRequest(conn io.Reader) (*block.Request, error) {
-	var err error
-	lengthData := make([]byte, MSG_HEADER_LENGTH)
-	_, err = io.ReadFull(conn, lengthData)
-	if IsEOF(err) {
-		return nil, io.EOF
-	}
+	data, err := receive(conn)
 	if err != nil {
-		return nil, fmt.Errorf("Fail to read message length size:", err)
-	}
-
-	length := DecodeLength(lengthData)
-	if length == 0 {
-		return nil, fmt.Errorf("Fail to decode message length size")
-	}
-	data := make([]byte, length, length)
-	if _, err := io.ReadFull(conn, data); err != nil {
-		return nil, fmt.Errorf("Fail to read message with size ", length, err)
+		return nil, err
 	}
 
 	req := &block.Request{}
@@ -77,29 +75,22 @@ func ReadRequest(conn io.Reader) (*block.Request, error) {
 	return req, nil
 }
 
-func SendResponse(conn io.Writer, resp *block.Response) error {
-	data, err := proto.Marshal(resp)
+func ReadResponse(conn io.Reader) (*block.Response, error) {
+	data, err := receive(conn)
 	if err != nil {
-		return fmt.Errorf("Fail to encode message: ", err)
+		return nil, err
 	}
-	length := len(data)
-	if length >= (1 << (MSG_HEADER_LENGTH * 8)) {
-		return fmt.Errorf("Length exceed maximum header length: ", length)
+
+	resp := &block.Response{}
+	if err := proto.Unmarshal(data, resp); err != nil {
+		return nil, fmt.Errorf("Fail to decode message: ", err)
 	}
-	lengthData := EncodeLength(uint32(length))
-	if _, err := conn.Write(lengthData); err != nil {
-		return fmt.Errorf("Fail to write message length size:", err)
-	}
-	if _, err := conn.Write(data); err != nil {
-		return fmt.Errorf("Fail to write message:", err)
-	}
-	return nil
+	return resp, nil
 }
 
-func ReadResponse(conn io.Reader) (*block.Response, error) {
-	var err error
+func receive(conn io.Reader) ([]byte, error) {
 	lengthData := make([]byte, MSG_HEADER_LENGTH)
-	_, err = io.ReadFull(conn, lengthData)
+	_, err := io.ReadFull(conn, lengthData)
 	if IsEOF(err) {
 		return nil, io.EOF
 	}
@@ -111,16 +102,11 @@ func ReadResponse(conn io.Reader) (*block.Response, error) {
 	if length == 0 {
 		return nil, fmt.Errorf("Fail to decode message length size")
 	}
-	data := make([]byte, length, length)
+	data := make([]byte, length)
 	if _, err := io.ReadFull(conn, data); err != nil {
 		return nil, fmt.Errorf("Fail to read message with size ", length, err)
 	}
-
-	resp := &block.Response{}
-	if err := proto.Unmarshal(data, resp); err != nil {
-		return nil, fmt.Errorf("Fail to decode message: ", err)
-	}
-	return resp, nil
+	return data, nil
 }
 
 func SendData(conn io.Writer, buf []byte) error {
