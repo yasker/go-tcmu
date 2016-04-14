@@ -2,11 +2,6 @@ syntax = "proto3";
 
 package block;
 
-service Transfer {
-	rpc Read(ReadRequest) returns (ReadResponse) {}
-	rpc Write(WriteRequest) returns (WriteResponse) {}
-}
-
 message Request {
 	int64 id = 1;
 	int64 type = 2;
@@ -19,23 +14,4 @@ message Response {
 	fixed64 type = 2;
 	string result = 3;
 	int64 length = 4;
-}
-
-message ReadRequest {
-	int64 offset = 1;
-	int64 length = 2;
-}
-
-message ReadResponse {
-	string result = 1;
-	bytes context = 2;
-}
-
-message WriteRequest {
-	int64 offset = 1;
-	bytes context = 2;
-}
-
-message WriteResponse {
-	string result = 1;
 }
