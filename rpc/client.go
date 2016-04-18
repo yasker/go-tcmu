@@ -57,27 +57,16 @@ func (c *Client) Close() {
 
 func (c *Client) startRequestProcess() {
 	for req := range c.requests {
-		header := req.Header
-		if err := SendRequest(c.conn, header); err != nil {
+		if err := SendRequest(c.conn, req); err != nil {
 			log.Error("Fail to send request:", err)
 			continue
-		}
-		if header.Type == MSG_TYPE_WRITE_REQUEST {
-			if err := SendData(c.conn, req.Data); err != nil {
-				log.Error("Fail to send data:", err)
-				continue
-			}
 		}
 	}
 }
 
 func (c *Client) startResponseProcess() {
 	for {
-		var (
-			response *Response
-			data     []byte
-		)
-		respHeader, err := ReadResponse(c.conn)
+		resp, err := ReadResponse(c.conn)
 		if err != nil {
 			if err == io.EOF {
 				log.Info("Connection closed")
@@ -86,28 +75,12 @@ func (c *Client) startResponseProcess() {
 			log.Error("Fail to read response:", err)
 			continue
 		}
-		if respHeader.Result != "Success" {
-			log.Error("Operation failed: ", respHeader.Result)
-			continue
-		}
-		if respHeader.Type == MSG_TYPE_READ_RESPONSE {
-			data = make([]byte, respHeader.Length, respHeader.Length)
-			if err := ReceiveData(c.conn, data); err != nil {
-				log.Error("Receive data failed:", err)
-				continue
-			}
-		}
-
 		c.seqRespChanMapMutex.Lock()
-		respChan := c.seqRespChanMap[respHeader.Id]
-		delete(c.seqRespChanMap, respHeader.Id)
+		respChan := c.seqRespChanMap[resp.Header.Id]
+		delete(c.seqRespChanMap, resp.Header.Id)
 		c.seqRespChanMapMutex.Unlock()
 
-		response = &Response{
-			Header: respHeader,
-			Data:   data,
-		}
-		respChan <- response
+		respChan <- resp
 	}
 }
 

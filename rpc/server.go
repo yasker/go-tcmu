@@ -50,25 +50,16 @@ func (s *Server) Stop() {
 
 func (s *Server) startResponseProcess() {
 	for resp := range s.responses {
-		if err := SendResponse(s.conn, resp.Header); err != nil {
+		if err := SendResponse(s.conn, resp); err != nil {
 			log.Error("Fail to send response: ", err)
 			continue
-		}
-		if resp.Header.Type == MSG_TYPE_READ_RESPONSE {
-			if err := SendData(s.conn, resp.Data); err != nil {
-				log.Error("Fail to send data:", err)
-				continue
-			}
 		}
 	}
 }
 
 func (s *Server) startRequestProcess() {
 	for {
-		var err error
-
-		req := &Request{}
-		req.Header, err = ReadRequest(s.conn)
+		req, err := ReadRequest(s.conn)
 		if err == io.EOF {
 			break
 		}
@@ -77,13 +68,6 @@ func (s *Server) startRequestProcess() {
 			continue
 		}
 
-		if req.Header.Type == MSG_TYPE_WRITE_REQUEST {
-			req.Data = make([]byte, req.Header.Length)
-			if err := ReceiveData(s.conn, req.Data); err != nil {
-				log.Error("Fail to receive data:", err)
-				continue
-			}
-		}
 		s.requests <- req
 	}
 }

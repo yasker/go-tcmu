@@ -31,7 +31,19 @@ func DecodeLength(bytes []byte) uint32 {
 	return binary.BigEndian.Uint32(bytes)
 }
 
-func SendRequest(conn io.Writer, req *block.Request) error {
+func SendRequest(conn io.Writer, req *Request) error {
+	if err := sendRequestHeader(conn, req.Header); err != nil {
+		return err
+	}
+	if req.Header.Type == MSG_TYPE_WRITE_REQUEST {
+		if err := sendData(conn, req.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sendRequestHeader(conn io.Writer, req *block.Request) error {
 	data, err := proto.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("Fail to encode message: ", err)
@@ -39,7 +51,19 @@ func SendRequest(conn io.Writer, req *block.Request) error {
 	return send(conn, data)
 }
 
-func SendResponse(conn io.Writer, resp *block.Response) error {
+func SendResponse(conn io.Writer, resp *Response) error {
+	if err := sendResponseHeader(conn, resp.Header); err != nil {
+		return err
+	}
+	if resp.Header.Type == MSG_TYPE_READ_RESPONSE {
+		if err := sendData(conn, resp.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sendResponseHeader(conn io.Writer, resp *block.Response) error {
 	data, err := proto.Marshal(resp)
 	if err != nil {
 		return fmt.Errorf("Fail to encode message: ", err)
@@ -62,7 +86,23 @@ func send(conn io.Writer, data []byte) error {
 	return nil
 }
 
-func ReadRequest(conn io.Reader) (*block.Request, error) {
+func ReadRequest(conn io.Reader) (*Request, error) {
+	var err error
+	req := &Request{}
+	req.Header, err = readRequestHeader(conn)
+	if err != nil {
+		return nil, err
+	}
+	if req.Header.Type == MSG_TYPE_WRITE_REQUEST {
+		req.Data = make([]byte, req.Header.Length)
+		if err := receiveData(conn, req.Data); err != nil {
+			return nil, err
+		}
+	}
+	return req, nil
+}
+
+func readRequestHeader(conn io.Reader) (*block.Request, error) {
 	data, err := receive(conn)
 	if err != nil {
 		return nil, err
@@ -75,7 +115,26 @@ func ReadRequest(conn io.Reader) (*block.Request, error) {
 	return req, nil
 }
 
-func ReadResponse(conn io.Reader) (*block.Response, error) {
+func ReadResponse(conn io.Reader) (*Response, error) {
+	var err error
+	resp := &Response{}
+	resp.Header, err = readResponseHeader(conn)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Header.Result != "Success" {
+		return nil, fmt.Errorf("Operation failed: ", resp.Header.Result)
+	}
+	if resp.Header.Type == MSG_TYPE_READ_RESPONSE {
+		resp.Data = make([]byte, resp.Header.Length, resp.Header.Length)
+		if err := receiveData(conn, resp.Data); err != nil {
+			return nil, err
+		}
+	}
+	return resp, nil
+}
+
+func readResponseHeader(conn io.Reader) (*block.Response, error) {
 	data, err := receive(conn)
 	if err != nil {
 		return nil, err
@@ -109,12 +168,12 @@ func receive(conn io.Reader) ([]byte, error) {
 	return data, nil
 }
 
-func SendData(conn io.Writer, buf []byte) error {
+func sendData(conn io.Writer, buf []byte) error {
 	_, err := conn.Write(buf)
 	return err
 }
 
-func ReceiveData(conn io.Reader, buf []byte) error {
+func receiveData(conn io.Reader, buf []byte) error {
 	_, err := io.ReadFull(conn, buf)
 	return err
 }
